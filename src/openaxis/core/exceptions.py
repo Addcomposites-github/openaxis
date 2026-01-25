@@ -100,3 +100,15 @@ class PluginError(OpenAxisError):
     ) -> None:
         super().__init__(message, details)
         self.plugin_name = plugin_name
+
+
+class GeometryError(OpenAxisError):
+    """Raised when geometry operations fail."""
+
+    pass
+
+
+class RobotError(OpenAxisError):
+    """Raised when robot operations fail."""
+
+    pass
