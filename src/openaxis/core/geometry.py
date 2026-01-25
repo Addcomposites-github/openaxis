@@ -102,15 +102,19 @@ class GeometryLoader:
 
         try:
             # Load with trimesh
-            mesh = trimesh.load(str(path), **kwargs)
+            loaded = trimesh.load(str(path), **kwargs)
 
             # Handle Scene vs Mesh
-            if isinstance(mesh, trimesh.Scene):
+            if isinstance(loaded, trimesh.Scene):
                 # Combine all geometries in scene
                 mesh = trimesh.util.concatenate(
-                    [geom for geom in mesh.geometry.values()
+                    [geom for geom in loaded.geometry.values()
                      if isinstance(geom, trimesh.Trimesh)]
                 )
+            elif isinstance(loaded, trimesh.Trimesh):
+                mesh = loaded
+            else:
+                raise GeometryError(f"Unexpected geometry type: {type(loaded)}")
 
             # Convert to COMPAS
             return GeometryConverter.trimesh_to_compas(mesh)
