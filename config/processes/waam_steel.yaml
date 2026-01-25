@@ -1,0 +1,84 @@
+# WAAM Steel Process Configuration
+# Wire Arc Additive Manufacturing for steel parts
+
+process:
+  name: "Steel WAAM"
+  type: "waam"
+  description: "Wire Arc Additive Manufacturing for mild steel parts"
+
+parameters:
+  # Wire parameters
+  wire_material: "ER70S-6"
+  wire_diameter: 1.2  # mm
+  wire_feed_rate: 8.0  # m/min
+
+  # Welding parameters
+  process_type: "CMT"  # Cold Metal Transfer
+  voltage: 22.0  # V
+  current: 180.0  # A
+  travel_speed: 10.0  # mm/s
+
+  # Shielding gas
+  gas_type: "Ar/CO2"
+  gas_composition: "82/18"  # 82% Ar, 18% CO2
+  gas_flow_rate: 18.0  # L/min
+
+  # Interpass
+  interpass_temperature: 150  # °C max
+  interpass_cooling: "natural"  # or "forced"
+  dwell_time: 0  # seconds between layers (0 = continuous)
+
+slicing:
+  # Layer parameters
+  layer_height: 2.5  # mm
+  bead_width: 6.0  # mm
+  overlap_percentage: 30  # % overlap between adjacent beads
+
+  # Toolpath strategy
+  infill_pattern: "zigzag"  # zigzag, contour, spiral
+  contour_count: 2  # number of perimeter passes
+  start_point_strategy: "seam"  # random, seam, nearest
+
+  # Multi-axis options
+  build_direction: "z"  # primary build direction
+  support_generation: false  # WAAM typically doesn't need support
+
+  # Speed adjustments
+  corner_speed_factor: 0.7  # slow down at corners
+  start_speed_factor: 0.5  # slow start for good fusion
+
+equipment:
+  # Welding power source
+  welder:
+    type: "fronius_tps500i"
+    job_number: 1
+    synergic_line: "CMT_Steel"
+
+  # Wire feeder
+  wire_feeder:
+    type: "integrated"
+    spool_size: 15  # kg
+
+  # Sensors (optional)
+  sensors:
+    - type: "thermal_camera"
+      model: "flir_a70"
+      monitoring: ["melt_pool", "interpass_temp"]
+    - type: "laser_scanner"
+      model: "mti_2d"
+      purpose: "layer_height_measurement"
+
+quality:
+  # In-process monitoring
+  monitor_arc_stability: true
+  monitor_temperature: true
+
+  # Acceptance criteria
+  layer_height_tolerance: 0.3  # mm
+  bead_width_tolerance: 0.5  # mm
+  max_porosity: 0.5  # %
+
+post_processing:
+  # Recommended post-processing
+  stress_relief: true
+  machining_allowance: 2.0  # mm per side

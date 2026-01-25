@@ -1,0 +1,186 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openaxis"
+version = "0.1.0"
+description = "Open-source robotic hybrid manufacturing platform"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+authors = [
+    {name = "OpenAxis Contributors"}
+]
+keywords = [
+    "robotics",
+    "manufacturing",
+    "additive-manufacturing",
+    "waam",
+    "cnc",
+    "ros2",
+    "compas"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    # Core COMPAS ecosystem
+    "compas>=2.0",
+    "compas_fab>=0.28",
+    
+    # Simulation
+    "pybullet>=3.2",
+    
+    # Geometry processing
+    "trimesh>=4.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    
+    # Configuration & utilities
+    "pyyaml>=6.0",
+    "jsonschema>=4.0",
+    "pydantic>=2.0",
+    "click>=8.0",
+    "rich>=13.0",
+    
+    # Async support
+    "aiofiles>=23.0",
+    "asyncio-mqtt>=0.16",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-asyncio>=0.21",
+    "pytest-xdist>=3.0",
+    "black>=23.0",
+    "isort>=5.12",
+    "flake8>=6.0",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+    "mkdocs-gen-files>=0.5",
+]
+hardware = [
+    "RobotRaconteur>=1.2",
+    "robotraconteurcompanion>=0.4",
+]
+ros = [
+    # ROS2 dependencies managed via rosdep
+]
+ui = [
+    # UI dependencies in src/ui/package.json
+]
+
+[project.scripts]
+openaxis = "openaxis.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/openaxis/openaxis"
+Documentation = "https://openaxis.github.io/openaxis"
+Repository = "https://github.com/openaxis/openaxis"
+Issues = "https://github.com/openaxis/openaxis/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+openaxis = ["py.typed", "*.yaml", "*.json"]
+
+# Black configuration
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+    | node_modules
+)/
+'''
+
+# isort configuration
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["openaxis"]
+skip = [".git", ".venv", "node_modules", "build", "dist"]
+
+# MyPy configuration
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "compas.*",
+    "compas_fab.*",
+    "pybullet.*",
+    "trimesh.*",
+    "RobotRaconteur.*",
+]
+ignore_missing_imports = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests (no external dependencies)",
+    "integration: Integration tests (may require simulation)",
+    "hardware: Hardware tests (requires physical setup)",
+    "slow: Slow tests (skip with -m 'not slow')",
+]
+asyncio_mode = "auto"
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src/openaxis"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

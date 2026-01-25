@@ -1,0 +1,96 @@
+# MkDocs Configuration for OpenAxis Documentation
+
+site_name: OpenAxis Documentation
+site_description: Open-Source Robotic Hybrid Manufacturing Platform
+site_author: OpenAxis Contributors
+site_url: https://openaxis.github.io/openaxis/
+
+repo_name: openaxis/openaxis
+repo_url: https://github.com/openaxis/openaxis
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            heading_level: 2
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: guides/installation.md
+    - Quick Start: guides/quickstart.md
+    - First Project: guides/first-project.md
+  - Architecture:
+    - Overview: architecture/system-architecture.md
+    - Core Module: architecture/core.md
+    - Slicing: architecture/slicing.md
+    - Motion Planning: architecture/motion.md
+    - Simulation: architecture/simulation.md
+    - Hardware: architecture/hardware.md
+  - Processes:
+    - WAAM: guides/processes/waam.md
+    - Pellet Extrusion: guides/processes/pellet.md
+    - Milling: guides/processes/milling.md
+  - API Reference:
+    - Core: api/core.md
+    - Slicing: api/slicing.md
+    - Motion: api/motion.md
+    - Simulation: api/simulation.md
+  - Development:
+    - Contributing: contributing.md
+    - Roadmap: roadmap.md
+    - Changelog: changelog.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/openaxis/openaxis
