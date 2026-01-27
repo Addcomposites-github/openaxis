@@ -88,3 +88,6 @@ test_stl_loading.html
 !docs/ROADMAP.md
 !docs/DEVELOPMENT.md
 !docs/TESTING_GUIDE.md
+
+# Claude Code
+.claude/
