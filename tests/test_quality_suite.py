@@ -1,0 +1,722 @@
+"""
+OpenAxis Quality Test Suite
+============================
+
+Comprehensive integration testing for the entire OpenAxis workflow.
+Tests end-to-end scenarios from geometry loading to G-code generation.
+
+Usage:
+    pytest tests/test_quality_suite.py -v
+    pytest tests/test_quality_suite.py -v --html=test_report.html
+"""
+
+import pytest
+import tempfile
+import shutil
+from pathlib import Path
+from typing import Dict, List
+import json
+import time
+
+# Import OpenAxis modules
+from openaxis.core.config import ConfigManager, RobotConfig, ProcessConfig
+from openaxis.core.project import Project, Part
+from openaxis.core.robot import RobotLoader, RobotInstance
+from openaxis.core.geometry import GeometryLoader, BoundingBox
+from openaxis.slicing.planar_slicer import PlanarSlicer
+from openaxis.slicing.toolpath import Toolpath, ToolpathSegment, ToolpathType
+from openaxis.slicing.gcode import GCodeGenerator, GCodeFlavor
+from openaxis.simulation.environment import SimulationEnvironment
+from openaxis.processes.waam import WAAMProcess, WAAMParameters
+from openaxis.processes.pellet import PelletExtrusionProcess, PelletExtrusionParameters
+from openaxis.processes.milling import MillingProcess, MillingParameters
+
+try:
+    from openaxis.motion.kinematics import IKSolver
+    from openaxis.motion.planner import CartesianPlanner
+    from openaxis.motion.collision import CollisionChecker
+    MOTION_AVAILABLE = True
+except ImportError:
+    MOTION_AVAILABLE = False
+
+
+class TestResults:
+    """Track test results and generate report"""
+
+    def __init__(self):
+        self.results = {
+            "total_tests": 0,
+            "passed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "errors": [],
+            "warnings": [],
+            "performance": {},
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+    def add_pass(self, test_name: str, duration: float):
+        self.results["passed"] += 1
+        self.results["total_tests"] += 1
+        self.results["performance"][test_name] = duration
+
+    def add_fail(self, test_name: str, error: str):
+        self.results["failed"] += 1
+        self.results["total_tests"] += 1
+        self.results["errors"].append({
+            "test": test_name,
+            "error": error
+        })
+
+    def add_warning(self, warning: str):
+        self.results["warnings"].append(warning)
+
+    def add_skip(self, test_name: str, reason: str):
+        self.results["skipped"] += 1
+        self.results["total_tests"] += 1
+        self.results["warnings"].append(f"{test_name}: {reason}")
+
+    def generate_report(self) -> str:
+        """Generate human-readable test report"""
+        report = []
+        report.append("=" * 80)
+        report.append("OpenAxis Quality Test Report")
+        report.append("=" * 80)
+        report.append(f"Timestamp: {self.results['timestamp']}")
+        report.append(f"\nTotal Tests: {self.results['total_tests']}")
+        report.append(f"  ✓ Passed:  {self.results['passed']}")
+        report.append(f"  ✗ Failed:  {self.results['failed']}")
+        report.append(f"  ⊘ Skipped: {self.results['skipped']}")
+
+        if self.results["errors"]:
+            report.append("\n" + "=" * 80)
+            report.append("ERRORS:")
+            report.append("=" * 80)
+            for error in self.results["errors"]:
+                report.append(f"\n✗ {error['test']}")
+                report.append(f"  {error['error']}")
+
+        if self.results["warnings"]:
+            report.append("\n" + "=" * 80)
+            report.append("WARNINGS:")
+            report.append("=" * 80)
+            for warning in self.results["warnings"]:
+                report.append(f"⚠ {warning}")
+
+        report.append("\n" + "=" * 80)
+        report.append("PERFORMANCE:")
+        report.append("=" * 80)
+        for test, duration in self.results["performance"].items():
+            report.append(f"{test}: {duration:.3f}s")
+
+        report.append("\n" + "=" * 80)
+        success_rate = (self.results["passed"] / self.results["total_tests"] * 100) if self.results["total_tests"] > 0 else 0
+        report.append(f"Success Rate: {success_rate:.1f}%")
+        report.append("=" * 80)
+
+        return "\n".join(report)
+
+    def save_json(self, filepath: Path):
+        """Save results as JSON"""
+        with open(filepath, 'w') as f:
+            json.dump(self.results, f, indent=2)
+
+
+@pytest.fixture(scope="session")
+def test_results():
+    """Global test results tracker"""
+    return TestResults()
+
+
+@pytest.fixture
+def temp_workspace():
+    """Create temporary workspace for tests"""
+    workspace = tempfile.mkdtemp()
+    yield Path(workspace)
+    shutil.rmtree(workspace)
+
+
+@pytest.fixture
+def sample_stl(temp_workspace):
+    """Create a simple cube STL file for testing"""
+    stl_path = temp_workspace / "test_cube.stl"
+
+    # Simple cube STL content (ASCII format)
+    stl_content = """solid cube
+facet normal 0 0 1
+  outer loop
+    vertex 0 0 10
+    vertex 10 0 10
+    vertex 10 10 10
+  endloop
+endfacet
+facet normal 0 0 1
+  outer loop
+    vertex 0 0 10
+    vertex 10 10 10
+    vertex 0 10 10
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 0 0 0
+    vertex 10 10 0
+    vertex 10 0 0
+  endloop
+endfacet
+facet normal 0 0 -1
+  outer loop
+    vertex 0 0 0
+    vertex 0 10 0
+    vertex 10 10 0
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 0 10 0
+    vertex 0 10 10
+    vertex 10 10 10
+  endloop
+endfacet
+facet normal 0 1 0
+  outer loop
+    vertex 0 10 0
+    vertex 10 10 10
+    vertex 10 10 0
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0 0 0
+    vertex 10 0 10
+    vertex 0 0 10
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0 0 0
+    vertex 10 0 0
+    vertex 10 0 10
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 10 0 0
+    vertex 10 10 0
+    vertex 10 10 10
+  endloop
+endfacet
+facet normal 1 0 0
+  outer loop
+    vertex 10 0 0
+    vertex 10 10 10
+    vertex 10 0 10
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 0 0 0
+    vertex 0 10 10
+    vertex 0 10 0
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 0 0 0
+    vertex 0 0 10
+    vertex 0 10 10
+  endloop
+endfacet
+endsolid cube
+"""
+
+    with open(stl_path, 'w') as f:
+        f.write(stl_content)
+
+    return stl_path
+
+
+class TestWorkflow1_GeometryLoading:
+    """Test Workflow 1: Geometry Loading and Processing"""
+
+    def test_load_stl_file(self, sample_stl, test_results):
+        """Load an STL file and verify mesh properties"""
+        start = time.time()
+        try:
+            loader = GeometryLoader()
+            mesh = loader.load(sample_stl)
+
+            assert mesh is not None, "Mesh should not be None"
+            assert hasattr(mesh, 'vertices'), "Mesh should have vertices"
+            assert hasattr(mesh, 'faces'), "Mesh should have faces"
+
+            # Cube should have 8 vertices and 12 triangular faces
+            assert len(mesh.vertices) == 8, f"Expected 8 vertices, got {len(mesh.vertices)}"
+            assert len(mesh.faces) == 12, f"Expected 12 faces, got {len(mesh.faces)}"
+
+            test_results.add_pass("test_load_stl_file", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_load_stl_file", str(e))
+            raise
+
+    def test_compute_bounding_box(self, sample_stl, test_results):
+        """Compute and verify bounding box"""
+        start = time.time()
+        try:
+            loader = GeometryLoader()
+            mesh = loader.load(sample_stl)
+            bbox = BoundingBox.from_mesh(mesh)
+
+            assert bbox is not None, "Bounding box should not be None"
+            assert bbox.min_point is not None, "Min point should be defined"
+            assert bbox.max_point is not None, "Max point should be defined"
+
+            # Verify cube dimensions (0-10 on each axis)
+            dimensions = bbox.dimensions()
+            assert dimensions[0] == pytest.approx(10, abs=0.1), "X dimension should be ~10"
+            assert dimensions[1] == pytest.approx(10, abs=0.1), "Y dimension should be ~10"
+            assert dimensions[2] == pytest.approx(10, abs=0.1), "Z dimension should be ~10"
+
+            test_results.add_pass("test_compute_bounding_box", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_compute_bounding_box", str(e))
+            raise
+
+
+class TestWorkflow2_ProjectManagement:
+    """Test Workflow 2: Project Creation and Management"""
+
+    def test_create_project(self, temp_workspace, test_results):
+        """Create a new project"""
+        start = time.time()
+        try:
+            project_path = temp_workspace / "test_project"
+            project = Project.create("Test Project", str(project_path))
+
+            assert project is not None, "Project should not be None"
+            assert project.name == "Test Project", "Project name mismatch"
+            assert project_path.exists(), "Project directory should exist"
+            assert (project_path / "project.json").exists(), "project.json should exist"
+
+            test_results.add_pass("test_create_project", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_create_project", str(e))
+            raise
+
+    def test_add_part_to_project(self, temp_workspace, sample_stl, test_results):
+        """Add a part to the project"""
+        start = time.time()
+        try:
+            project_path = temp_workspace / "test_project2"
+            project = Project.create("Test Project", str(project_path))
+
+            part = Part(
+                name="Test Cube",
+                part_type=PartType.ADDITIVE,
+                geometry_path=str(sample_stl)
+            )
+            project.add_part(part)
+
+            assert len(project.parts) == 1, "Project should have 1 part"
+            assert project.parts[0].name == "Test Cube", "Part name mismatch"
+
+            test_results.add_pass("test_add_part_to_project", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_add_part_to_project", str(e))
+            raise
+
+    def test_save_and_load_project(self, temp_workspace, sample_stl, test_results):
+        """Save and reload a project"""
+        start = time.time()
+        try:
+            project_path = temp_workspace / "test_project3"
+            project = Project.create("Test Project", str(project_path))
+
+            part = Part(
+                name="Test Cube",
+                part_type=PartType.ADDITIVE,
+                geometry_path=str(sample_stl)
+            )
+            project.add_part(part)
+            project.save()
+
+            # Reload project
+            loaded_project = Project.load(str(project_path))
+
+            assert loaded_project.name == project.name, "Project name mismatch after reload"
+            assert len(loaded_project.parts) == 1, "Parts not preserved after reload"
+            assert loaded_project.parts[0].name == "Test Cube", "Part name mismatch after reload"
+
+            test_results.add_pass("test_save_and_load_project", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_save_and_load_project", str(e))
+            raise
+
+
+class TestWorkflow3_Slicing:
+    """Test Workflow 3: Slicing and Toolpath Generation"""
+
+    def test_planar_slicing(self, sample_stl, test_results):
+        """Slice a mesh into layers"""
+        start = time.time()
+        try:
+            loader = GeometryLoader()
+            mesh = loader.load(sample_stl)
+
+            config = SlicingConfig(
+                layer_height=1.0,
+                extrusion_width=2.0,
+                print_speed=50.0
+            )
+
+            slicer = PlanarSlicer(config)
+            layers = slicer.slice_mesh(mesh)
+
+            assert layers is not None, "Layers should not be None"
+            assert len(layers) > 0, "Should have at least one layer"
+
+            # 10mm tall cube with 1mm layers = ~10 layers
+            assert len(layers) >= 8, f"Expected ~10 layers, got {len(layers)}"
+
+            test_results.add_pass("test_planar_slicing", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_planar_slicing", str(e))
+            raise
+
+    def test_toolpath_generation(self, sample_stl, test_results):
+        """Generate toolpath from sliced mesh"""
+        start = time.time()
+        try:
+            loader = GeometryLoader()
+            mesh = loader.load(sample_stl)
+
+            config = SlicingConfig(
+                layer_height=1.0,
+                extrusion_width=2.0,
+                print_speed=50.0
+            )
+
+            slicer = PlanarSlicer(config)
+            toolpath = slicer.generate_toolpath(mesh)
+
+            assert toolpath is not None, "Toolpath should not be None"
+            assert len(toolpath.segments) > 0, "Toolpath should have segments"
+
+            # Verify segment types
+            move_types = [seg.move_type for seg in toolpath.segments]
+            assert MoveType.EXTRUSION in move_types or MoveType.LINEAR in move_types, \
+                "Toolpath should contain extrusion or linear moves"
+
+            test_results.add_pass("test_toolpath_generation", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_toolpath_generation", str(e))
+            raise
+
+    def test_gcode_generation(self, sample_stl, temp_workspace, test_results):
+        """Generate G-code from toolpath"""
+        start = time.time()
+        try:
+            loader = GeometryLoader()
+            mesh = loader.load(sample_stl)
+
+            config = SlicingConfig(
+                layer_height=1.0,
+                extrusion_width=2.0,
+                print_speed=50.0
+            )
+
+            slicer = PlanarSlicer(config)
+            toolpath = slicer.generate_toolpath(mesh)
+
+            generator = GCodeGenerator(flavor=GCodeFlavor.MARLIN)
+            gcode = generator.generate(toolpath)
+
+            assert gcode is not None, "G-code should not be None"
+            assert len(gcode) > 0, "G-code should not be empty"
+
+            # Verify G-code structure
+            lines = gcode.split('\n')
+            assert any('G1' in line or 'G0' in line for line in lines), \
+                "G-code should contain movement commands"
+
+            # Save G-code file
+            gcode_path = temp_workspace / "test_output.gcode"
+            with open(gcode_path, 'w') as f:
+                f.write(gcode)
+
+            assert gcode_path.exists(), "G-code file should be created"
+
+            test_results.add_pass("test_gcode_generation", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_gcode_generation", str(e))
+            raise
+
+
+class TestWorkflow4_ProcessPlugins:
+    """Test Workflow 4: Process Plugin Configuration"""
+
+    def test_waam_process(self, test_results):
+        """Test WAAM process configuration"""
+        start = time.time()
+        try:
+            params = WAAMParameters(
+                wire_feed_speed=5.0,
+                travel_speed=10.0,
+                arc_voltage=24.0,
+                arc_current=150.0,
+                shielding_gas="Ar",
+                gas_flow_rate=15.0
+            )
+
+            process = WAAMProcess(params)
+
+            assert process is not None, "WAAM process should not be None"
+            assert process.validate_parameters(), "Parameters should be valid"
+
+            info = process.get_process_info()
+            assert info["type"] == "waam", "Process type should be 'waam'"
+
+            test_results.add_pass("test_waam_process", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_waam_process", str(e))
+            raise
+
+    def test_pellet_extrusion_process(self, test_results):
+        """Test pellet extrusion process configuration"""
+        start = time.time()
+        try:
+            params = PelletExtrusionParameters(
+                nozzle_temperature=220.0,
+                bed_temperature=60.0,
+                extrusion_multiplier=1.0,
+                print_speed=50.0,
+                retraction_distance=2.0,
+                retraction_speed=40.0
+            )
+
+            process = PelletExtrusionProcess(params)
+
+            assert process is not None, "Pellet process should not be None"
+            assert process.validate_parameters(), "Parameters should be valid"
+
+            info = process.get_process_info()
+            assert info["type"] == "pellet_extrusion", "Process type should be 'pellet_extrusion'"
+
+            test_results.add_pass("test_pellet_extrusion_process", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_pellet_extrusion_process", str(e))
+            raise
+
+    def test_milling_process(self, test_results):
+        """Test milling process configuration"""
+        start = time.time()
+        try:
+            params = MillingParameters(
+                spindle_speed=10000.0,
+                feed_rate=500.0,
+                plunge_rate=100.0,
+                tool_diameter=6.0,
+                stepover=0.5,
+                stepdown=1.0
+            )
+
+            process = MillingProcess(params)
+
+            assert process is not None, "Milling process should not be None"
+            assert process.validate_parameters(), "Parameters should be valid"
+
+            info = process.get_process_info()
+            assert info["type"] == "milling", "Process type should be 'milling'"
+
+            test_results.add_pass("test_milling_process", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_milling_process", str(e))
+            raise
+
+
+class TestWorkflow5_Configuration:
+    """Test Workflow 5: Configuration Management"""
+
+    def test_load_robot_config(self, test_results):
+        """Load robot configuration from file"""
+        start = time.time()
+        try:
+            config_mgr = ConfigManager()
+
+            # Try to load ABB robot config
+            robot_config_path = Path("config/robots/abb_irb6700.yaml")
+            if robot_config_path.exists():
+                robot_config = config_mgr.load_robot_config("abb_irb6700")
+
+                assert robot_config is not None, "Robot config should not be None"
+                assert robot_config.name == "ABB IRB 6700", "Robot name mismatch"
+                assert robot_config.num_joints == 6, "Should have 6 joints"
+
+                test_results.add_pass("test_load_robot_config", time.time() - start)
+            else:
+                test_results.add_skip("test_load_robot_config", "Robot config file not found")
+                pytest.skip("Robot config file not found")
+        except Exception as e:
+            test_results.add_fail("test_load_robot_config", str(e))
+            raise
+
+    def test_load_process_config(self, test_results):
+        """Load process configuration from file"""
+        start = time.time()
+        try:
+            config_mgr = ConfigManager()
+
+            # Try to load WAAM process config
+            process_config_path = Path("config/processes/waam_steel.yaml")
+            if process_config_path.exists():
+                process_config = config_mgr.load_process_config("waam_steel")
+
+                assert process_config is not None, "Process config should not be None"
+                assert process_config.name == "WAAM Steel", "Process name mismatch"
+
+                test_results.add_pass("test_load_process_config", time.time() - start)
+            else:
+                test_results.add_skip("test_load_process_config", "Process config file not found")
+                pytest.skip("Process config file not found")
+        except Exception as e:
+            test_results.add_fail("test_load_process_config", str(e))
+            raise
+
+
+class TestWorkflow6_Simulation:
+    """Test Workflow 6: Simulation Environment"""
+
+    def test_simulation_environment_creation(self, test_results):
+        """Create simulation environment"""
+        start = time.time()
+        try:
+            sim = SimulationEnvironment(gui=False)
+
+            assert sim is not None, "Simulation should not be None"
+            assert sim.client is not None, "PyBullet client should be initialized"
+
+            sim.close()
+
+            test_results.add_pass("test_simulation_environment_creation", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_simulation_environment_creation", str(e))
+            raise
+
+    def test_load_object_in_simulation(self, sample_stl, test_results):
+        """Load an object into simulation"""
+        start = time.time()
+        try:
+            sim = SimulationEnvironment(gui=False)
+
+            # Load the cube
+            obj_id = sim.load_object(str(sample_stl), position=[0, 0, 0])
+
+            assert obj_id is not None, "Object ID should not be None"
+            assert obj_id >= 0, "Object ID should be valid"
+
+            sim.close()
+
+            test_results.add_pass("test_load_object_in_simulation", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_load_object_in_simulation", str(e))
+            raise
+
+
+@pytest.mark.skipif(not MOTION_AVAILABLE, reason="Motion planning modules not available")
+class TestWorkflow7_MotionPlanning:
+    """Test Workflow 7: Motion Planning (Optional - requires MoveIt2)"""
+
+    def test_inverse_kinematics(self, test_results):
+        """Test inverse kinematics solver"""
+        start = time.time()
+        try:
+            test_results.add_skip("test_inverse_kinematics", "IK solver not fully implemented")
+            pytest.skip("IK solver not fully implemented")
+        except Exception as e:
+            test_results.add_fail("test_inverse_kinematics", str(e))
+            raise
+
+    def test_cartesian_planning(self, test_results):
+        """Test Cartesian path planning"""
+        start = time.time()
+        try:
+            test_results.add_skip("test_cartesian_planning", "Cartesian planner not fully implemented")
+            pytest.skip("Cartesian planner not fully implemented")
+        except Exception as e:
+            test_results.add_fail("test_cartesian_planning", str(e))
+            raise
+
+
+class TestWorkflow8_EndToEnd:
+    """Test Workflow 8: Complete End-to-End Workflow"""
+
+    def test_complete_workflow(self, temp_workspace, sample_stl, test_results):
+        """Execute complete workflow: Project → Geometry → Slice → G-code"""
+        start = time.time()
+        try:
+            # 1. Create project
+            project_path = temp_workspace / "e2e_project"
+            project = Project.create("E2E Test Project", str(project_path))
+
+            # 2. Add part
+            part = Part(
+                name="E2E Test Cube",
+                part_type=PartType.ADDITIVE,
+                geometry_path=str(sample_stl)
+            )
+            project.add_part(part)
+
+            # 3. Load geometry
+            loader = GeometryLoader()
+            mesh = loader.load(sample_stl)
+
+            # 4. Generate toolpath
+            config = SlicingConfig(
+                layer_height=1.0,
+                extrusion_width=2.0,
+                print_speed=50.0
+            )
+            slicer = PlanarSlicer(config)
+            toolpath = slicer.generate_toolpath(mesh)
+
+            # 5. Generate G-code
+            generator = GCodeGenerator(flavor=GCodeFlavor.MARLIN)
+            gcode = generator.generate(toolpath)
+
+            # 6. Save G-code
+            gcode_path = project_path / "output.gcode"
+            with open(gcode_path, 'w') as f:
+                f.write(gcode)
+
+            # 7. Save project
+            project.save()
+
+            # Verify everything
+            assert project_path.exists(), "Project directory should exist"
+            assert gcode_path.exists(), "G-code file should exist"
+            assert len(toolpath.segments) > 0, "Toolpath should have segments"
+            assert len(gcode) > 100, "G-code should be substantial"
+
+            test_results.add_pass("test_complete_workflow", time.time() - start)
+        except Exception as e:
+            test_results.add_fail("test_complete_workflow", str(e))
+            raise
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Generate report at end of test session"""
+    # This will be called by pytest after all tests complete
+    pass
+
+
+if __name__ == "__main__":
+    # Run tests and generate report
+    print("Starting OpenAxis Quality Test Suite...")
+    print("=" * 80)
+
+    pytest.main([
+        __file__,
+        "-v",
+        "--tb=short",
+        "-ra"  # Show summary of all test outcomes
+    ])

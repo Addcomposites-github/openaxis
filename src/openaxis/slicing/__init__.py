@@ -1,21 +1,19 @@
 """
-Slicing module - Toolpath generation for manufacturing processes.
+Slicing module - Toolpath generation for additive and subtractive manufacturing.
 
-This module provides:
-- Abstract Slicer base class for all slicing implementations
-- ORNL Slicer 2 integration for LFAM processes
-- compas_slicer integration for FDM-style toolpaths
-- Custom slicing strategies (planar, non-planar, multi-axis)
+This module provides slicing and toolpath generation capabilities for various
+manufacturing processes including WAAM, pellet extrusion, and milling.
 """
 
-# Placeholder imports - to be implemented in Phase 1
-# from openaxis.slicing.base import Slicer
-# from openaxis.slicing.toolpath import Toolpath, ToolpathSegment
-# from openaxis.slicing.ornl_slicer import ORNLSlicerWrapper
+from openaxis.slicing.planar_slicer import PlanarSlicer
+from openaxis.slicing.toolpath import Toolpath, ToolpathSegment, ToolpathType
+from openaxis.slicing.gcode import GCodeGenerator, GCodeConfig
 
 __all__ = [
-    # "Slicer",
-    # "Toolpath",
-    # "ToolpathSegment",
-    # "ORNLSlicerWrapper",
+    "PlanarSlicer",
+    "Toolpath",
+    "ToolpathSegment",
+    "ToolpathType",
+    "GCodeGenerator",
+    "GCodeConfig",
 ]

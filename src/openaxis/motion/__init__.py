@@ -2,19 +2,38 @@
 Motion module - Robot kinematics and motion planning.
 
 This module provides:
-- Robot model representation and kinematics
-- Motion planning interface (MoveIt2 integration)
-- Trajectory generation and execution
-- External axis support (positioners, linear tracks)
+- Inverse kinematics solvers (numerical and Jacobian-based)
+- Motion planning (Cartesian and joint-space)
+- Collision detection (PyBullet-based)
+- Trajectory optimization
+- External axes support (positioners, linear tracks)
 """
 
-# Placeholder imports - to be implemented in Phase 1-2
-# from openaxis.motion.robot import Robot
-# from openaxis.motion.planner import MotionPlanner
-# from openaxis.motion.trajectory import Trajectory
+from openaxis.motion.collision import CollisionChecker
+from openaxis.motion.external_axes import (
+    ExternalAxesController,
+    ExternalAxisType,
+    PositionerConfig,
+    create_linear_track,
+    create_turntable,
+)
+from openaxis.motion.kinematics import IKSolver, JacobianIKSolver
+from openaxis.motion.planner import (
+    CartesianPlanner,
+    JointPlanner,
+    TrajectoryOptimizer,
+)
 
 __all__ = [
-    # "Robot",
-    # "MotionPlanner",
-    # "Trajectory",
+    "IKSolver",
+    "JacobianIKSolver",
+    "CartesianPlanner",
+    "JointPlanner",
+    "TrajectoryOptimizer",
+    "CollisionChecker",
+    "ExternalAxesController",
+    "ExternalAxisType",
+    "PositionerConfig",
+    "create_turntable",
+    "create_linear_track",
 ]

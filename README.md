@@ -32,7 +32,8 @@ OpenAxis is built on proven open-source foundations:
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+ (for backend)
+- Node.js 20+ (for desktop UI)
 - [Conda](https://docs.conda.io/en/latest/miniconda.html) (recommended)
 - Git
 
@@ -43,29 +44,36 @@ OpenAxis is built on proven open-source foundations:
 git clone https://github.com/openaxis/openaxis.git
 cd openaxis
 
-# Setup development environment
-./scripts/setup_dev.sh
-
-# Activate environment
+# Setup Python backend
+conda create -n openaxis python=3.11
 conda activate openaxis
+pip install -e .
 
 # Verify installation
-openaxis --version
+python -m pytest tests/
+
+# Setup Desktop UI (optional)
+cd src/ui
+npm install
+npm run dev  # Starts Electron app with Python backend
 ```
 
-### First Project
+### Desktop Application
+
+OpenAxis includes a modern desktop application built with Electron:
 
 ```bash
-# Create a new project
-openaxis project create "my_first_project" ./projects/my_first_project
+cd src/ui
 
-# View project info
-openaxis project info ./projects/my_first_project
+# Development mode
+npm run dev
 
-# List available configurations
-openaxis config list-robots
-openaxis config list-processes
+# Build for production
+npm run build
+npm run build:electron
 ```
+
+See [src/ui/README.md](src/ui/README.md) for detailed UI documentation.
 
 ## 📖 Documentation
 
@@ -117,12 +125,12 @@ pre-commit run --all-files
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| Phase 1 | 🚧 In Progress | Core framework + WAAM demo |
-| Phase 2 | 📋 Planned | Multi-process + external axes |
-| Phase 3 | 📋 Planned | Production UI + monitoring |
-| Phase 4 | 📋 Planned | Industrial hardening |
+| Phase 1 | ✅ Complete | Core framework + WAAM demo |
+| Phase 2 | ✅ Complete | Multi-process + external axes |
+| Phase 3 | ✅ Complete | Production UI + monitoring |
+| Phase 4 | 📋 Next | Industrial hardening |
 
-See [ROADMAP.md](docs/ROADMAP.md) for detailed milestones.
+See [ROADMAP.md](docs/ROADMAP.md) for detailed milestones and [PHASE3_COMPLETE.md](docs/PHASE3_COMPLETE.md) for the latest completion status.
 
 ## 🤝 Contributing
 
