@@ -187,19 +187,62 @@ function CameraFramer({ parts }: { parts: GeometryPartData[] }) {
   return null;
 }
 
-/** Toolpath trail that builds up over time during simulation. Uses shared conversion. */
+/**
+ * Toolpath trail that builds up over time during simulation.
+ * Splits waypoints into PRINT (perimeter/infill) vs TRAVEL segments
+ * to avoid drawing green lines across travel jumps.
+ */
 function ToolpathTrail({ waypoints, currentTime }: { waypoints: Waypoint[]; currentTime: number }) {
-  const points = useMemo(() => {
+  const { printSegments, travelSegments } = useMemo(() => {
     const visible = waypoints.filter((w) => w.time <= currentTime);
-    if (visible.length < 2) return null;
-    return visible.map(
-      (w) => toolpathPointToScene(w.position as [number, number, number])
-    );
+    if (visible.length < 2) return { printSegments: [] as [number, number, number][][], travelSegments: [] as [number, number, number][][] };
+
+    // Split into contiguous runs by segment type
+    const printSegs: [number, number, number][][] = [];
+    const travelSegs: [number, number, number][][] = [];
+    let currentPrint: [number, number, number][] = [];
+    let currentTravel: [number, number, number][] = [];
+
+    for (let i = 0; i < visible.length; i++) {
+      const w = visible[i];
+      const pt = toolpathPointToScene(w.position as [number, number, number]);
+      const isTravel = w.segmentType === 'travel';
+
+      if (isTravel) {
+        // Flush print segment
+        if (currentPrint.length >= 2) {
+          printSegs.push(currentPrint);
+        }
+        currentPrint = [];
+        // Continue travel
+        currentTravel.push(pt);
+      } else {
+        // Flush travel segment
+        if (currentTravel.length >= 2) {
+          travelSegs.push(currentTravel);
+        }
+        currentTravel = [];
+        // Continue print
+        currentPrint.push(pt);
+      }
+    }
+    // Flush remaining
+    if (currentPrint.length >= 2) printSegs.push(currentPrint);
+    if (currentTravel.length >= 2) travelSegs.push(currentTravel);
+
+    return { printSegments: printSegs, travelSegments: travelSegs };
   }, [waypoints, currentTime]);
 
-  if (!points) return null;
-
-  return <Line points={points} color="#22c55e" lineWidth={2} />;
+  return (
+    <>
+      {printSegments.map((pts, i) => (
+        <Line key={`print-${i}`} points={pts} color="#22c55e" lineWidth={2} />
+      ))}
+      {travelSegments.map((pts, i) => (
+        <Line key={`travel-${i}`} points={pts} color="#9ca3af" lineWidth={1} />
+      ))}
+    </>
+  );
 }
 
 /** Emits [SCENE_CHECK] console info periodically for closed-loop verification. */

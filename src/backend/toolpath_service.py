@@ -89,6 +89,14 @@ class ToolpathService:
             # Generate toolpath
             toolpath = slicer.slice(mesh)
 
+            # Post-process: optimize segment order for smooth printing
+            # (nearest-neighbor reordering + cross-layer continuity)
+            toolpath.optimize_segment_order()
+
+            # Insert explicit travel segments between non-adjacent segments
+            # (creates continuous motion for simulation)
+            toolpath.insert_travel_segments()
+
             # Convert toolpath to JSON-serializable format
             toolpath_data = self._toolpath_to_dict(toolpath, params)
 

@@ -5,6 +5,7 @@ This module provides planar slicing functionality that intersects a 3D mesh
 with horizontal planes to generate 2D contours for each layer.
 """
 
+import math
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -32,6 +33,7 @@ class PlanarSlicer:
         infill_density: float = 0.2,
         infill_pattern: InfillPattern = InfillPattern.LINES,
         support_enabled: bool = False,
+        seam_angle: float = 0.0,
     ):
         """
         Initialize the planar slicer.
@@ -43,6 +45,8 @@ class PlanarSlicer:
             infill_density: Infill density (0.0 to 1.0)
             infill_pattern: Pattern for infill
             support_enabled: Whether to generate support structures
+            seam_angle: Angle (radians) from centroid for perimeter start point alignment.
+                        0.0 = positive X direction. Ensures consistent seam across layers.
         """
         self.layer_height = layer_height
         self.extrusion_width = extrusion_width
@@ -50,6 +54,7 @@ class PlanarSlicer:
         self.infill_density = infill_density
         self.infill_pattern = infill_pattern
         self.support_enabled = support_enabled
+        self.seam_angle = seam_angle
 
     def slice(
         self,
@@ -200,6 +205,30 @@ class PlanarSlicer:
 
             if len(points) < 2:
                 continue
+
+            # Seam alignment: rotate the point list so the point nearest
+            # to self.seam_angle (relative to the contour centroid) comes first.
+            # This ensures every layer's perimeter starts at the same angular
+            # position, creating a consistent seam line.
+            if len(points) >= 3:
+                cx = sum(p.x for p in points) / len(points)
+                cy = sum(p.y for p in points) / len(points)
+
+                best_idx = 0
+                best_angle_diff = float("inf")
+                for pi, p in enumerate(points):
+                    angle = math.atan2(p.y - cy, p.x - cx)
+                    diff = abs(angle - self.seam_angle)
+                    # Wrap to [0, pi]
+                    if diff > math.pi:
+                        diff = 2 * math.pi - diff
+                    if diff < best_angle_diff:
+                        best_angle_diff = diff
+                        best_idx = pi
+
+                # Rotate so the seam-aligned vertex is first
+                if best_idx > 0:
+                    points = points[best_idx:] + points[:best_idx]
 
             # Close the loop
             if len(points) > 2:

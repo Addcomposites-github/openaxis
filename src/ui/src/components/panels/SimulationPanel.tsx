@@ -125,9 +125,16 @@ export default function SimulationPanel() {
       try {
         console.log('[SimPanel] Loading simulation trajectory...');
         const simInfo = await createSimulation(toolpathData.id);
-        setTotalLayers(simInfo.totalLayers || toolpathData.totalLayers || 0);
         const traj = await getTrajectory(simInfo.id);
         console.log(`[SimPanel] Trajectory loaded: ${traj.waypoints?.length} waypoints, ${traj.totalTime}s`);
+        // Derive totalLayers: prefer API value, then toolpath data, then max layer from waypoints
+        let layers = simInfo.totalLayers || toolpathData.totalLayers || 0;
+        if (layers === 0 && traj.waypoints?.length > 0) {
+          let maxL = 0;
+          for (const w of traj.waypoints) { if ((w.layer ?? 0) > maxL) maxL = w.layer ?? 0; }
+          layers = maxL + 1;
+        }
+        setTotalLayers(layers);
         setTrajectory(traj);
         setSimState({ totalTime: traj.totalTime, currentTime: 0 });
         setSimMode('toolpath');
@@ -219,6 +226,17 @@ export default function SimulationPanel() {
     };
     computeIK();
   }, [trajectory, ikStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Derive totalLayers from trajectory when available (handles cached trajectories)
+  useEffect(() => {
+    if (!trajectory || totalLayers > 0) return;
+    const wps = trajectory.waypoints;
+    if (wps && wps.length > 0) {
+      let maxLayer = 0;
+      for (const w of wps) { if ((w.layer ?? 0) > maxLayer) maxLayer = w.layer ?? 0; }
+      setTotalLayers(maxLayer + 1);
+    }
+  }, [trajectory, totalLayers]);
 
   // Update current layer from sim time
   useEffect(() => {
@@ -590,6 +608,10 @@ export default function SimulationPanel() {
             <option value="2">2x</option>
             <option value="5">5x</option>
             <option value="10">10x</option>
+            <option value="50">50x</option>
+            <option value="100">100x</option>
+            <option value="500">500x</option>
+            <option value="1000">1000x</option>
           </select>
         </div>
 
@@ -611,6 +633,34 @@ export default function SimulationPanel() {
           )}
           <span>{formatTime(simState.totalTime)}</span>
         </div>
+
+        {/* Jump-to-layer input */}
+        {simMode === 'toolpath' && trajectory && totalLayers > 0 && (
+          <div className="flex items-center gap-2 mt-2">
+            <label className="text-xs text-gray-600 whitespace-nowrap">Jump to layer:</label>
+            <input
+              type="number"
+              min={0}
+              max={totalLayers}
+              placeholder={String(currentLayer)}
+              className="w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const target = parseInt((e.target as HTMLInputElement).value, 10);
+                  if (!isNaN(target) && target >= 0 && target <= totalLayers) {
+                    // Find the first waypoint at the target layer
+                    const wp = trajectory.waypoints.find((w) => w.layer >= target);
+                    if (wp) {
+                      handleTimeChange(wp.time);
+                      (e.target as HTMLInputElement).value = '';
+                    }
+                  }
+                }
+              }}
+            />
+            <span className="text-xs text-gray-400">/ {totalLayers}</span>
+          </div>
+        )}
       </div>
     </div>
   );
