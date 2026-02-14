@@ -30,7 +30,8 @@ class ToolpathService:
     def generate_toolpath(
         self,
         geometry_path: str,
-        params: Optional[Dict[str, Any]] = None
+        params: Optional[Dict[str, Any]] = None,
+        part_position: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         """
         Generate toolpath from geometry.
@@ -38,6 +39,8 @@ class ToolpathService:
         Args:
             geometry_path: Path to geometry file
             params: Slicing parameters
+            part_position: [x, y, z] offset in mm (Z-up) — mesh is translated
+                           *before* slicing so waypoints are generated in-place.
 
         Returns:
             Dictionary with toolpath data
@@ -58,6 +61,14 @@ class ToolpathService:
         try:
             # Load geometry
             mesh = GeometryLoader.load(geometry_path)
+
+            # Translate mesh to part position before slicing so that the
+            # slicer produces waypoints already at the correct location.
+            if part_position and len(part_position) >= 3:
+                ox, oy, oz = part_position[0], part_position[1], part_position[2]
+                if ox != 0 or oy != 0 or oz != 0:
+                    from openaxis.core.geometry import TransformationUtilities
+                    mesh = TransformationUtilities.translate(mesh, [ox, oy, oz])
 
             # Create slicer
             pattern_map = {
@@ -106,10 +117,10 @@ class ToolpathService:
         for segment in toolpath.segments:
             seg_dict = {
                 'type': segment.type.value if hasattr(segment.type, 'value') else str(segment.type),
-                'layer': segment.layer,
+                'layer': segment.layer_index,
                 'points': [[float(p[0]), float(p[1]), float(p[2])] for p in segment.points],
                 'speed': float(segment.speed) if segment.speed else 1000.0,
-                'extrusionRate': float(segment.extrusion_rate) if segment.extrusion_rate else 1.0,
+                'extrusionRate': float(segment.flow_rate) if segment.flow_rate else 1.0,
             }
             segments_data.append(seg_dict)
 

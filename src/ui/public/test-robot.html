@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Robot URDF Test</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 15px;
+            font-family: monospace;
+            font-size: 12px;
+            max-width: 400px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3>Robot URDF Loading Test</h3>
+        <div id="status">Loading...</div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+        import URDFLoader from 'https://cdn.jsdelivr.net/npm/urdf-loader@0.12.6/+esm';
+
+        const statusDiv = document.getElementById('status');
+
+        function log(msg) {
+            console.log(msg);
+            statusDiv.innerHTML += '<br>' + msg;
+        }
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(5, 3, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(10, 10, 5);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // Grid
+        const gridHelper = new THREE.GridHelper(20, 20);
+        scene.add(gridHelper);
+
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // Load Robot
+        log('Creating URDFLoader...');
+        const manager = new THREE.LoadingManager();
+
+        manager.onStart = (url) => {
+            log('Started loading: ' + url);
+        };
+
+        manager.onLoad = () => {
+            log('✅ All resources loaded!');
+        };
+
+        manager.onError = (url) => {
+            log('❌ Error loading: ' + url);
+        };
+
+        const loader = new URDFLoader(manager);
+
+        // Set working path for resolving relative mesh paths
+        loader.workingPath = '/config/';
+
+        log('Setting up custom mesh loader...');
+        loader.loadMeshCb = (path, manager, onComplete) => {
+            log('Loading mesh: ' + path);
+
+            // Resolve path
+            let resolvedPath = path;
+            if (path.startsWith('meshes/')) {
+                resolvedPath = '/config/' + path;
+            }
+
+            log('Resolved to: ' + resolvedPath);
+
+            const stlLoader = new STLLoader(manager);
+            stlLoader.load(
+                resolvedPath,
+                (geometry) => {
+                    log('✅ Mesh loaded: ' + resolvedPath);
+                    const material = new THREE.MeshStandardMaterial({
+                        color: 0xf0f0f0,
+                        metalness: 0.3,
+                        roughness: 0.6
+                    });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    onComplete(mesh);
+                },
+                undefined,
+                (err) => {
+                    log('❌ Mesh error: ' + resolvedPath + ' - ' + err);
+                    onComplete(new THREE.Object3D(), err);
+                }
+            );
+        };
+
+        log('Loading URDF from /config/urdf/abb_irb6700.urdf...');
+        loader.load(
+            '/config/urdf/abb_irb6700.urdf',
+            (robot) => {
+                log('✅ URDF loaded!');
+                log('Robot has ' + robot.children.length + ' children');
+                log('Links: ' + Object.keys(robot.links).join(', '));
+
+                scene.add(robot);
+                log('Robot added to scene');
+            },
+            undefined,
+            (err) => {
+                log('❌ URDF error: ' + err);
+            }
+        );
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        log('Setup complete. Check console for detailed logs.');
+    </script>
+</body>
+</html>

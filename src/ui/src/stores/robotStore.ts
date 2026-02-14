@@ -1,14 +1,17 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import { persist } from 'zustand/middleware';
 import type { RobotConfiguration, RobotState } from '../types';
 
 interface RobotStoreState {
   configuration: RobotConfiguration | null;
+  baseRotation: [number, number, number]; // degrees, for Z-up → Y-up conversion
   state: RobotState;
   isConnecting: boolean;
 
   // Actions
   setConfiguration: (config: RobotConfiguration) => void;
+  setBaseRotation: (rotation: [number, number, number]) => void;
   setState: (state: Partial<RobotState>) => void;
   connect: (ipAddress: string, port: number) => Promise<void>;
   disconnect: () => Promise<void>;
@@ -21,8 +24,10 @@ interface RobotStoreState {
 }
 
 export const useRobotStore = create<RobotStoreState>()(
+  persist(
   immer((set, get) => ({
     configuration: null,
+    baseRotation: [-90, 0, 0] as [number, number, number], // Default: Z-up URDF → Y-up Three.js
     state: {
       connected: false,
       enabled: false,
@@ -37,6 +42,11 @@ export const useRobotStore = create<RobotStoreState>()(
     setConfiguration: (config) =>
       set((state) => {
         state.configuration = config;
+      }),
+
+    setBaseRotation: (rotation) =>
+      set((state) => {
+        state.baseRotation = rotation;
       }),
 
     setState: (updates) =>
@@ -185,5 +195,12 @@ export const useRobotStore = create<RobotStoreState>()(
         state.state.tcpPosition = position;
         state.state.tcpOrientation = orientation;
       }),
-  }))
+  })),
+  {
+    name: 'openaxis-robot-store',
+    partialize: (state) => ({
+      configuration: state.configuration,
+      baseRotation: state.baseRotation,
+    }),
+  })
 );

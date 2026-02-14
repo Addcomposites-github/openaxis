@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = 'http://localhost:8080';
+import { apiClient, ApiResponse, checkHealth as checkHealthBase } from './client';
 
 export interface ToolpathSegment {
   type: string;
@@ -37,17 +35,20 @@ export interface SlicingParams {
 
 /**
  * Generate toolpath from geometry file
+ * @param partPosition Optional [x, y, z] in mm (Z-up) to offset all waypoints
  */
 export async function generateToolpath(
   geometryPath: string,
-  params: SlicingParams
+  params: SlicingParams,
+  partPosition?: { x: number; y: number; z: number }
 ): Promise<ToolpathData> {
-  const response = await axios.post(`${API_BASE_URL}/api/toolpath/generate`, {
+  const response = await apiClient.post<ApiResponse<ToolpathData>>('/api/toolpath/generate', {
     geometryPath,
-    params
+    params,
+    ...(partPosition && { partPosition: [partPosition.x, partPosition.y, partPosition.z] }),
   });
 
-  if (response.data.status === 'success') {
+  if (response.data.status === 'success' && response.data.data) {
     return response.data.data;
   } else {
     throw new Error(response.data.error || 'Failed to generate toolpath');
@@ -58,9 +59,9 @@ export async function generateToolpath(
  * Get toolpath by ID
  */
 export async function getToolpath(toolpathId: string): Promise<ToolpathData> {
-  const response = await axios.get(`${API_BASE_URL}/api/toolpath/${toolpathId}`);
+  const response = await apiClient.get<ApiResponse<ToolpathData>>(`/api/toolpath/${toolpathId}`);
 
-  if (response.data.status === 'success') {
+  if (response.data.status === 'success' && response.data.data) {
     return response.data.data;
   } else {
     throw new Error(response.data.error || 'Toolpath not found');
@@ -74,12 +75,12 @@ export async function exportGCode(
   toolpathId: string,
   outputPath: string
 ): Promise<string> {
-  const response = await axios.post(`${API_BASE_URL}/api/toolpath/export-gcode`, {
+  const response = await apiClient.post<ApiResponse<{ gcodeFile: string; lines: number; size: number }>>('/api/toolpath/export-gcode', {
     toolpathId,
     outputPath
   });
 
-  if (response.data.status === 'success') {
+  if (response.data.status === 'success' && response.data.data) {
     return response.data.data.gcodeFile;
   } else {
     throw new Error(response.data.error || 'Failed to export G-code');
@@ -87,15 +88,27 @@ export async function exportGCode(
 }
 
 /**
+ * Upload a geometry file to the backend and return the server-side path.
+ */
+export async function uploadGeometryFile(file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await apiClient.post<ApiResponse<{ serverPath: string }>>('/api/geometry/upload-file', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+
+  if (response.data.status === 'success' && response.data.data) {
+    return response.data.data.serverPath;
+  } else {
+    throw new Error(response.data.error || 'Failed to upload geometry file');
+  }
+}
+
+/**
  * Check backend health
  */
 export async function checkHealth(): Promise<boolean> {
-  try {
-    const response = await axios.get(`${API_BASE_URL}/api/health`, {
-      timeout: 2000
-    });
-    return response.data.status === 'ok';
-  } catch (error) {
-    return false;
-  }
+  const result = await checkHealthBase();
+  return result.ok;
 }

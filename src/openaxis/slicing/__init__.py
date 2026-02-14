@@ -6,7 +6,7 @@ manufacturing processes including WAAM, pellet extrusion, and milling.
 """
 
 from openaxis.slicing.planar_slicer import PlanarSlicer
-from openaxis.slicing.toolpath import Toolpath, ToolpathSegment, ToolpathType
+from openaxis.slicing.toolpath import Toolpath, ToolpathSegment, ToolpathType, InfillPattern
 from openaxis.slicing.gcode import GCodeGenerator, GCodeConfig
 
 __all__ = [
@@ -14,6 +14,7 @@ __all__ = [
     "Toolpath",
     "ToolpathSegment",
     "ToolpathType",
+    "InfillPattern",
     "GCodeGenerator",
     "GCodeConfig",
 ]

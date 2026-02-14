@@ -1,10 +1,9 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
 import Dashboard from './pages/Dashboard';
 import ProjectManager from './pages/ProjectManager';
-import GeometryEditor from './pages/GeometryEditor';
-import ToolpathEditor from './pages/ToolpathEditor';
-import Simulation from './pages/Simulation';
+import WorkspaceView from './pages/WorkspaceView';
 import Monitoring from './pages/Monitoring';
 import Settings from './pages/Settings';
 
@@ -12,15 +11,20 @@ function App() {
   return (
     <Router>
       <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/projects" element={<ProjectManager />} />
-          <Route path="/geometry" element={<GeometryEditor />} />
-          <Route path="/toolpath" element={<ToolpathEditor />} />
-          <Route path="/simulation" element={<Simulation />} />
-          <Route path="/monitoring" element={<Monitoring />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/projects" element={<ProjectManager />} />
+            <Route path="/workspace" element={<WorkspaceView />} />
+            <Route path="/monitoring" element={<Monitoring />} />
+            <Route path="/settings" element={<Settings />} />
+            {/* Redirect old routes for backwards compat */}
+            <Route path="/robot-setup" element={<Navigate to="/workspace?mode=setup" replace />} />
+            <Route path="/geometry" element={<Navigate to="/workspace?mode=geometry" replace />} />
+            <Route path="/toolpath" element={<Navigate to="/workspace?mode=toolpath" replace />} />
+            <Route path="/simulation" element={<Navigate to="/workspace?mode=simulation" replace />} />
+          </Routes>
+        </ErrorBoundary>
       </Layout>
     </Router>
   );

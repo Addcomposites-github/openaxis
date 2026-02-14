@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ChartBarIcon,
@@ -6,66 +6,34 @@ import {
   CubeIcon,
   DocumentTextIcon,
 } from '@heroicons/react/24/outline';
-
-interface DashboardStats {
-  totalProjects: number;
-  activeJobs: number;
-  totalPrintTime: number;
-  completedParts: number;
-}
-
-interface RecentProject {
-  id: string;
-  name: string;
-  process: string;
-  lastModified: string;
-  status: 'completed' | 'in_progress' | 'failed';
-}
+import { useProjectStore } from '../stores/projectStore';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [stats, setStats] = useState<DashboardStats>({
-    totalProjects: 0,
-    activeJobs: 0,
-    totalPrintTime: 0,
-    completedParts: 0,
-  });
-
-  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const { projects, isLoading, loadProjects } = useProjectStore();
 
   useEffect(() => {
-    // TODO: Load dashboard data from Python backend
-    setStats({
-      totalProjects: 12,
-      activeJobs: 2,
-      totalPrintTime: 156.5,
-      completedParts: 48,
-    });
+    loadProjects();
+  }, [loadProjects]);
 
-    setRecentProjects([
-      {
-        id: '1',
-        name: 'Bracket Assembly',
-        process: 'WAAM',
-        lastModified: '2 hours ago',
-        status: 'completed',
-      },
-      {
-        id: '2',
-        name: 'Large Vessel',
-        process: 'Pellet Extrusion',
-        lastModified: '5 hours ago',
-        status: 'in_progress',
-      },
-      {
-        id: '3',
-        name: 'Mold Core',
-        process: 'Milling',
-        lastModified: '1 day ago',
-        status: 'completed',
-      },
-    ]);
-  }, []);
+  // Compute stats from real project data
+  const stats = useMemo(() => {
+    const totalProjects = projects.length;
+    const activeJobs = projects.filter(
+      (p) => p.status === 'in_progress' || p.status === 'ready'
+    ).length;
+    const completedParts = projects.filter((p) => p.status === 'completed').length;
+    // Estimate total print time from completed projects (mock estimate based on count)
+    const totalPrintTime = completedParts * 3.5;
+    return { totalProjects, activeJobs, completedParts, totalPrintTime };
+  }, [projects]);
+
+  // Sort projects by modifiedAt desc, take top 5
+  const recentProjects = useMemo(() => {
+    return [...projects]
+      .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+      .slice(0, 5);
+  }, [projects]);
 
   const statCards = [
     {
@@ -94,30 +62,52 @@ export default function Dashboard() {
     },
   ];
 
-  const getStatusColor = (status: RecentProject['status']) => {
+  const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
         return 'bg-green-100 text-green-800';
       case 'in_progress':
+      case 'ready':
         return 'bg-blue-100 text-blue-800';
       case 'failed':
         return 'bg-red-100 text-red-800';
+      case 'draft':
+        return 'bg-gray-100 text-gray-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
   };
 
-  const getStatusText = (status: RecentProject['status']) => {
+  const getStatusText = (status: string) => {
     switch (status) {
       case 'completed':
         return 'Completed';
       case 'in_progress':
         return 'In Progress';
+      case 'ready':
+        return 'Ready';
       case 'failed':
         return 'Failed';
+      case 'draft':
+        return 'Draft';
       default:
-        return 'Unknown';
+        return status;
     }
+  };
+
+  const formatRelativeDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    if (diffDays < 30) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString();
   };
 
   return (
@@ -134,7 +124,9 @@ export default function Dashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600">{stat.name}</p>
-                  <p className="text-3xl font-bold text-gray-900 mt-2">{stat.value}</p>
+                  <p className="text-3xl font-bold text-gray-900 mt-2">
+                    {isLoading ? '...' : stat.value}
+                  </p>
                 </div>
                 <div className={`${stat.color} p-3 rounded-lg`}>
                   <Icon className="w-6 h-6 text-white" />
@@ -151,29 +143,39 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold text-gray-900">Recent Projects</h2>
         </div>
         <div className="divide-y divide-gray-200">
-          {recentProjects.map((project) => (
-            <div key={project.id} className="px-6 py-4 hover:bg-gray-50 transition-colors">
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <h3 className="text-sm font-medium text-gray-900">{project.name}</h3>
-                  <p className="text-sm text-gray-500 mt-1">
-                    {project.process} • {project.lastModified}
-                  </p>
-                </div>
-                <span
-                  className={`px-3 py-1 text-xs font-medium rounded-full ${getStatusColor(
-                    project.status
-                  )}`}
-                >
-                  {getStatusText(project.status)}
-                </span>
-              </div>
+          {recentProjects.length === 0 ? (
+            <div className="px-6 py-8 text-center text-gray-500">
+              <p className="text-sm">No projects yet. Create your first project to get started.</p>
             </div>
-          ))}
+          ) : (
+            recentProjects.map((project) => (
+              <div key={project.id} className="px-6 py-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <h3 className="text-sm font-medium text-gray-900">{project.name}</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {project.process.replace('_', ' ').toUpperCase()} &bull;{' '}
+                      {formatRelativeDate(project.modifiedAt)}
+                    </p>
+                  </div>
+                  <span
+                    className={`px-3 py-1 text-xs font-medium rounded-full ${getStatusColor(
+                      project.status
+                    )}`}
+                  >
+                    {getStatusText(project.status)}
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
         <div className="px-6 py-4 border-t border-gray-200">
-          <button className="text-sm font-medium text-blue-600 hover:text-blue-700">
-            View all projects →
+          <button
+            onClick={() => navigate('/projects')}
+            className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            View all projects &rarr;
           </button>
         </div>
       </div>
@@ -196,7 +198,7 @@ export default function Dashboard() {
         </button>
 
         <button
-          onClick={() => navigate('/geometry')}
+          onClick={() => navigate('/workspace?mode=geometry')}
           className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-left hover:border-blue-500 hover:shadow-md transition-all"
         >
           <div className="flex items-center space-x-4">
@@ -211,7 +213,7 @@ export default function Dashboard() {
         </button>
 
         <button
-          onClick={() => navigate('/simulation')}
+          onClick={() => navigate('/workspace?mode=simulation')}
           className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-left hover:border-blue-500 hover:shadow-md transition-all"
         >
           <div className="flex items-center space-x-4">
@@ -219,8 +221,8 @@ export default function Dashboard() {
               <ChartBarIcon className="w-6 h-6 text-purple-600" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-gray-900">View Analytics</h3>
-              <p className="text-xs text-gray-500 mt-1">Review process performance</p>
+              <h3 className="text-sm font-semibold text-gray-900">Robot Simulation</h3>
+              <p className="text-xs text-gray-500 mt-1">Control robot joints interactively</p>
             </div>
           </div>
         </button>
