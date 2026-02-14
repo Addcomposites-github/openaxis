@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useThree } from '@react-three/fiber';
+import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import URDFLoader from 'urdf-loader';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -120,18 +120,36 @@ export default function RobotModel({
     };
   }, [scene, urdfPath, meshPath]); // Only reload URDF when these change
 
-  // Update joint angles when they change (no URDF reload)
-  useEffect(() => {
-    if (robotRef.current && isLoaded) {
-      Object.entries(jointAngles).forEach(([jointName, angle]) => {
-        try {
-          robotRef.current.setJointValue(jointName, angle);
-        } catch (e) {
-          // Joint may not exist — ignore silently
-        }
-      });
+  // Update joint angles every render frame using useFrame.
+  // This is more reliable than useEffect during animation playback because
+  // React may batch state updates, but useFrame runs every requestAnimationFrame.
+  const jointAnglesRef = useRef(jointAngles);
+  jointAnglesRef.current = jointAngles;
+  const prevAnglesRef = useRef<Record<string, number>>({});
+
+  useFrame(() => {
+    if (!robotRef.current || !isLoaded) return;
+    const angles = jointAnglesRef.current;
+
+    // Dirty check: only update joints if any angle changed
+    let changed = false;
+    for (const [name, val] of Object.entries(angles)) {
+      if (prevAnglesRef.current[name] !== val) {
+        changed = true;
+        break;
+      }
     }
-  }, [jointAngles, isLoaded]);
+    if (!changed) return;
+
+    for (const [name, val] of Object.entries(angles)) {
+      try {
+        robotRef.current.setJointValue(name, val);
+      } catch (_e) {
+        // Joint may not exist — ignore silently
+      }
+    }
+    prevAnglesRef.current = { ...angles };
+  });
 
   // Update position and rotation on the wrapper (without reloading the robot)
   useEffect(() => {

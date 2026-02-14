@@ -310,7 +310,7 @@ export default function SceneManager() {
     }
 
     const waypoints = trajectory.waypoints;
-    if (waypoints.length === 0 || jointTrajectory.length === 0) return jointAngles;
+    if (waypoints.length === 0 || jointTrajectory.length < 2) return jointAngles;
 
     const t = simState.currentTime;
     let idx = 0;

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { persist } from 'zustand/middleware';
 import type { ToolpathSegment } from '../components/ToolpathRenderer';
-import type { Waypoint, TrajectoryData } from '../api/simulation';
+import type { TrajectoryData } from '../api/simulation';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -70,7 +70,7 @@ export interface SimState {
 }
 
 export type SimMode = 'manual' | 'toolpath';
-export type IKStatus = 'idle' | 'computing' | 'ready' | 'failed';
+export type IKStatus = 'idle' | 'computing' | 'ready' | 'failed' | 'fallback';
 
 // ─── Store Interface ─────────────────────────────────────────────────────────
 
@@ -223,6 +223,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (state.selectedPartId === id) {
             state.selectedPartId = null;
           }
+          // Clean up file from in-memory cache + IndexedDB (async, non-blocking)
+          _geometryFiles.delete(id);
+          _idbDelete(id).catch(() => {});
         }),
 
       updateGeometryPart: (id, updates) =>
@@ -300,7 +303,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setTrajectory: (traj) =>
         set((state) => {
+          // Skip if same reference (no-op)
+          if (state.trajectory === traj) return;
+
+          // Check if the trajectory data is equivalent (prevents duplicate API calls
+          // in React strict mode from resetting IK state)
+          const isEquivalent = traj && state.trajectory &&
+            traj.totalTime === state.trajectory.totalTime &&
+            traj.waypoints?.length === state.trajectory.waypoints?.length;
+
+          if (isEquivalent) {
+            // Same data, different object — just update the reference, don't reset IK
+            state.trajectory = traj;
+            return;
+          }
+
           state.trajectory = traj;
+          // Only reset IK state when trajectory genuinely changes
+          state.jointTrajectory = null;
+          state.reachability = null;
+          state.ikStatus = 'idle';
         }),
     })),
     {
@@ -322,18 +344,101 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   )
 );
 
-// ─── Non-serializable file store (module-level, not in Zustand) ──────────────
+// ─── Persistent geometry file store (IndexedDB + in-memory cache) ────────────
+//
+// Files are stored in IndexedDB so they survive page reloads.  The in-memory
+// Map acts as a fast synchronous cache; on startup we hydrate it from IDB.
+
+import {
+  saveGeometryFile as _idbSave,
+  loadAllGeometryFiles as _idbLoadAll,
+  deleteGeometryFile as _idbDelete,
+} from './geometryDB';
 
 const _geometryFiles = new Map<string, File>();
 
+/** Whether the initial hydration from IndexedDB has completed. */
+let _hydrated = false;
+
+/** Promise that resolves once hydration is done. Await this before any
+ *  operation that requires geometry files to be available. */
+let _hydratePromise: Promise<void> | null = null;
+
+/**
+ * Store a geometry file — writes to both the in-memory cache and IndexedDB.
+ * The IDB write is fire-and-forget; the in-memory cache is updated synchronously.
+ */
 export function storeGeometryFile(partId: string, file: File) {
   _geometryFiles.set(partId, file);
+  // Persist to IndexedDB in background (non-blocking)
+  _idbSave(partId, file).catch((e) =>
+    console.error('[GeometryStore] Failed to persist file to IndexedDB:', e),
+  );
 }
 
+/**
+ * Get a geometry file from the in-memory cache.
+ * Returns undefined if the file hasn't been loaded/stored yet.
+ */
 export function getGeometryFile(partId: string): File | undefined {
   return _geometryFiles.get(partId);
 }
 
+/**
+ * Remove a geometry file from both in-memory cache and IndexedDB.
+ */
 export function removeGeometryFile(partId: string) {
   _geometryFiles.delete(partId);
+  _idbDelete(partId).catch((e) =>
+    console.error('[GeometryStore] Failed to delete file from IndexedDB:', e),
+  );
+}
+
+/**
+ * Hydrate the in-memory file cache from IndexedDB.
+ * Called once on app startup; also recreates blob URLs on the parts
+ * in the workspace store.  Returns the number of files restored.
+ */
+export async function hydrateGeometryFiles(): Promise<number> {
+  if (_hydrated) return _geometryFiles.size;
+
+  if (!_hydratePromise) {
+    _hydratePromise = (async () => {
+      try {
+        const files = await _idbLoadAll();
+        const store = useWorkspaceStore.getState();
+        const parts = store.geometryParts;
+        let restored = 0;
+
+        for (const [partId, file] of files) {
+          _geometryFiles.set(partId, file);
+
+          // Recreate blob URL on the matching part
+          const part = parts.find((p) => p.id === partId);
+          if (part && !part.fileUrl) {
+            const blobUrl = URL.createObjectURL(file);
+            store.updateGeometryPart(partId, { fileUrl: blobUrl });
+            restored++;
+          }
+        }
+
+        console.log(
+          `[GeometryStore] Hydrated ${files.size} files from IndexedDB, ` +
+          `restored blob URLs on ${restored} parts`,
+        );
+      } catch (e) {
+        console.error('[GeometryStore] Hydration failed:', e);
+      } finally {
+        _hydrated = true;
+      }
+    })();
+  }
+
+  await _hydratePromise;
+  return _geometryFiles.size;
+}
+
+/** Check whether geometry file hydration has completed. */
+export function isGeometryHydrated(): boolean {
+  return _hydrated;
 }

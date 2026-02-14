@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -6,8 +7,18 @@ import ProjectManager from './pages/ProjectManager';
 import WorkspaceView from './pages/WorkspaceView';
 import Monitoring from './pages/Monitoring';
 import Settings from './pages/Settings';
+import { hydrateGeometryFiles } from './stores/workspaceStore';
 
 function App() {
+  // Restore geometry files from IndexedDB on app startup
+  useEffect(() => {
+    hydrateGeometryFiles().then((count) => {
+      if (count > 0) {
+        console.log(`[App] Geometry hydration complete: ${count} files available`);
+      }
+    });
+  }, []);
+
   return (
     <Router>
       <Layout>

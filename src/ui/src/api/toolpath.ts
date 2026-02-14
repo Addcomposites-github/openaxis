@@ -46,6 +46,8 @@ export async function generateToolpath(
     geometryPath,
     params,
     ...(partPosition && { partPosition: [partPosition.x, partPosition.y, partPosition.z] }),
+  }, {
+    timeout: 120000, // Slicing can take >30s for complex geometry
   });
 
   if (response.data.status === 'success' && response.data.data) {

@@ -18,6 +18,8 @@ import type { RobotConfig, JointLimits, FKResult } from '../../api/robot';
 import { createSimulation, getTrajectory } from '../../api/simulation';
 import { checkHealth } from '../../api/client';
 import type { Waypoint } from '../../api/simulation';
+import { waypointToRobotFrame } from '../../utils/units';
+import { solveTrajectoryIKLocal } from '../../utils/analyticalIK';
 
 function waypointAtTime(waypoints: Waypoint[], t: number): Waypoint | null {
   if (waypoints.length === 0) return null;
@@ -48,7 +50,6 @@ export default function SimulationPanel() {
   const simMode = useWorkspaceStore((s) => s.simMode);
   const simState = useWorkspaceStore((s) => s.simState);
   const jointAngles = useWorkspaceStore((s) => s.jointAngles);
-  const jointTrajectory = useWorkspaceStore((s) => s.jointTrajectory);
   const ikStatus = useWorkspaceStore((s) => s.ikStatus);
   const trajectory = useWorkspaceStore((s) => s.trajectory);
 
@@ -68,6 +69,12 @@ export default function SimulationPanel() {
   const [loadingTrajectory, setLoadingTrajectory] = useState(false);
   const [currentLayer, setCurrentLayer] = useState(0);
   const [totalLayers, setTotalLayers] = useState(0);
+
+  // Refs to prevent double-fire in React strict mode
+  const backendConnectedRef = useRef(false);
+  const ikComputingRef = useRef(false);
+  const trajectoryLoadedRef = useRef(false);
+  backendConnectedRef.current = backendConnected;
 
   // Init backend connection and load robot config
   useEffect(() => {
@@ -107,19 +114,26 @@ export default function SimulationPanel() {
 
   // If we have toolpath data, create simulation trajectory
   useEffect(() => {
-    if (!toolpathData || !backendConnected || trajectory) return;
+    if (!toolpathData || !backendConnected) return;
+    // Guard: don't reload if we already have a trajectory or are already loading
+    if (trajectory || trajectoryLoadedRef.current) return;
+
+    trajectoryLoadedRef.current = true;
 
     const loadSim = async () => {
       setLoadingTrajectory(true);
       try {
+        console.log('[SimPanel] Loading simulation trajectory...');
         const simInfo = await createSimulation(toolpathData.id);
         setTotalLayers(simInfo.totalLayers || toolpathData.totalLayers || 0);
         const traj = await getTrajectory(simInfo.id);
+        console.log(`[SimPanel] Trajectory loaded: ${traj.waypoints?.length} waypoints, ${traj.totalTime}s`);
         setTrajectory(traj);
         setSimState({ totalTime: traj.totalTime, currentTime: 0 });
         setSimMode('toolpath');
       } catch (e) {
         console.warn('Failed to create simulation from toolpath:', e);
+        trajectoryLoadedRef.current = false; // Allow retry
         setSimMode('manual');
       } finally {
         setLoadingTrajectory(false);
@@ -128,37 +142,83 @@ export default function SimulationPanel() {
     loadSim();
   }, [toolpathData, backendConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Read end-effector offset from cell setup
-  const endEffectorOffset = useWorkspaceStore((s) => s.cellSetup.endEffector.offset);
+  // Read cell setup for coordinate transforms
+  const cellSetup = useWorkspaceStore((s) => s.cellSetup);
+  const endEffectorOffset = cellSetup.endEffector.offset;
 
-  // Pre-compute IK for trajectory
+  // Compute build plate origin in scene space (Y-up, meters)
+  const buildPlateOrigin: [number, number, number] = useMemo(() => [
+    cellSetup.workTablePosition[0],
+    cellSetup.workTablePosition[1] + cellSetup.workTableSize[1] / 2,
+    cellSetup.workTablePosition[2],
+  ], [cellSetup.workTablePosition, cellSetup.workTableSize]);
+
+  // Pre-compute IK for trajectory — two-stage: backend first, then frontend fallback
   useEffect(() => {
-    if (!trajectory || !backendConnected || ikStatus !== 'idle') return;
+    if (!trajectory || ikStatus !== 'idle') return;
+    // Guard: prevent double computation in React strict mode
+    if (ikComputingRef.current) return;
+    ikComputingRef.current = true;
 
     const computeIK = async () => {
       setIKStatus('computing');
+      console.log('[IK] Starting IK computation...');
+
+      // Transform waypoints to robot base frame (meters, Z-up)
+      const robotPositionScene: [number, number, number] = [0, 0, 0]; // Robot at scene origin
+      const robotFramePositions: [number, number, number][] = trajectory.waypoints.map(
+        (w) => waypointToRobotFrame(
+          w.position as [number, number, number],
+          buildPlateOrigin,
+          robotPositionScene,
+        )
+      );
+
+      // Stage 1: Try backend IK if connected
+      if (backendConnectedRef.current) {
+        try {
+          const tcpOffset = [...endEffectorOffset];
+          const ikResult = await solveTrajectoryIK(robotFramePositions, undefined, tcpOffset);
+          if (ikResult.trajectory && ikResult.trajectory.length > 0) {
+            setJointTrajectory(ikResult.trajectory);
+            setReachability(ikResult.reachability);
+            setIKStatus('ready');
+            ikComputingRef.current = false;
+            console.log(
+              `[IK Backend] Solved: ${ikResult.reachableCount}/${ikResult.totalPoints} reachable ` +
+              `(${ikResult.reachabilityPercent.toFixed(1)}%)`
+            );
+            return;
+          }
+          console.warn('[IK Backend] Returned empty trajectory, falling back to frontend IK');
+        } catch (e) {
+          console.warn('[IK Backend] Failed, falling back to frontend IK:', e);
+        }
+      }
+
+      // Stage 2: Frontend analytical IK fallback
       try {
-        // Waypoints are in mm (Z-up) — convert to meters for backend IK
-        const positions: [number, number, number][] = trajectory.waypoints.map(
-          (w) => [w.position[0] / 1000, w.position[1] / 1000, w.position[2] / 1000]
-        );
-        // TCP offset is [x,y,z,rx,ry,rz] — stored in meters already
-        const tcpOffset = [...endEffectorOffset];
-        const ikResult = await solveTrajectoryIK(positions, undefined, tcpOffset);
-        setJointTrajectory(ikResult.trajectory);
-        setReachability(ikResult.reachability);
-        setIKStatus('ready');
+        const toolLength = endEffectorOffset[2] || 0.15;
+        console.log(`[IK Fallback] Computing analytical IK for ${robotFramePositions.length} waypoints...`);
+        const t0 = performance.now();
+        const result = solveTrajectoryIKLocal(robotFramePositions, toolLength);
+        const dt = performance.now() - t0;
+        setJointTrajectory(result.trajectory);
+        setReachability(result.reachability);
+        setIKStatus('fallback');
+        ikComputingRef.current = false;
         console.log(
-          `IK solved: ${ikResult.reachableCount}/${ikResult.totalPoints} reachable ` +
-          `(${ikResult.reachabilityPercent.toFixed(1)}%)`
+          `[IK Fallback] Solved in ${dt.toFixed(0)}ms: ${result.reachableCount}/${result.totalPoints} reachable ` +
+          `(${result.reachabilityPercent.toFixed(1)}%)`
         );
       } catch (e) {
-        console.warn('IK trajectory computation failed:', e);
+        console.error('[IK] Both backend and frontend IK failed:', e);
         setIKStatus('failed');
+        ikComputingRef.current = false;
       }
     };
     computeIK();
-  }, [trajectory, backendConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trajectory, ikStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update current layer from sim time
   useEffect(() => {
@@ -268,6 +328,9 @@ export default function SimulationPanel() {
         )}
         {ikStatus === 'ready' && (
           <span className="px-3 py-1 rounded-full text-xs font-medium bg-green-600 text-white">IK Ready</span>
+        )}
+        {ikStatus === 'fallback' && (
+          <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-600 text-white">IK Approx.</span>
         )}
         {ikStatus === 'failed' && (
           <span className="px-3 py-1 rounded-full text-xs font-medium bg-red-500 text-white">IK Unavailable</span>
