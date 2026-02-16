@@ -3,10 +3,17 @@ import { immer } from 'zustand/middleware/immer';
 import { persist } from 'zustand/middleware';
 import type { ToolpathSegment } from '../components/ToolpathRenderer';
 import type { TrajectoryData } from '../api/simulation';
+import type { ToolpathColorMode, ColorRange } from '../utils/toolpathColorMaps';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type WorkspaceMode = 'setup' | 'geometry' | 'toolpath' | 'simulation';
+
+export interface ProcessConfig {
+  processType: 'waam' | 'pellet_extrusion' | 'milling' | 'wire_laser' | 'concrete' | 'hybrid';
+  materialId: string | null;
+  materialName: string;
+}
 
 export interface CellSetup {
   robot: {
@@ -16,8 +23,9 @@ export interface CellSetup {
   };
   endEffector: {
     type: 'waam_torch' | 'pellet_extruder' | 'spindle' | 'none';
-    offset: [number, number, number, number, number, number];
+    offset: [number, number, number, number, number, number]; // [x,y,z (m), rx,ry,rz (deg)]
     mass: number;
+    convention: 'Z+' | 'Z-' | 'X+' | 'X-' | 'Y+' | 'Y-';
   };
   externalAxis: {
     enabled: boolean;
@@ -25,6 +33,7 @@ export interface CellSetup {
     position: [number, number, number];
     rotation: [number, number, number];
   };
+  processConfig: ProcessConfig;
   workTableSize: [number, number, number];
   workTablePosition: [number, number, number];
 }
@@ -67,6 +76,8 @@ export interface SimState {
   totalTime: number;
   speed: number;
   collisionDetected: boolean;
+  followTCP: boolean;
+  showDeposition: boolean;
 }
 
 export type SimMode = 'manual' | 'toolpath';
@@ -88,8 +99,12 @@ interface WorkspaceState {
 
   // Toolpath (from ToolpathEditor)
   toolpathData: ToolpathData | null;
+  toolpathPartId: string | null; // Which part the toolpath was generated for
+  toolpathStale: boolean;
   currentLayer: number;
   showAllLayers: boolean;
+  toolpathColorMode: ToolpathColorMode;
+  toolpathColorRange: ColorRange;
 
   // Simulation (from Simulation.tsx)
   simMode: SimMode;
@@ -116,9 +131,12 @@ interface WorkspaceState {
   setGeometryParts: (parts: GeometryPartData[]) => void;
 
   // Actions — Toolpath
-  setToolpathData: (data: ToolpathData | null) => void;
+  setToolpathData: (data: ToolpathData | null, partId?: string | null) => void;
+  setToolpathStale: (stale: boolean) => void;
   setCurrentLayer: (layer: number) => void;
   setShowAllLayers: (show: boolean) => void;
+  setToolpathColorMode: (mode: ToolpathColorMode) => void;
+  setToolpathColorRange: (range: ColorRange) => void;
 
   // Actions — Simulation
   setSimMode: (mode: SimMode) => void;
@@ -143,12 +161,18 @@ const defaultCellSetup: CellSetup = {
     type: 'waam_torch',
     offset: [0, 0, 0.15, 0, 0, 0],
     mass: 5.0,
+    convention: 'Z+',
   },
   externalAxis: {
     enabled: false,
     type: 'none',
     position: [0, 0, 0],
     rotation: [0, 0, 0],
+  },
+  processConfig: {
+    processType: 'waam',
+    materialId: 'waam_steel_er70s6',
+    materialName: 'Steel ER70S-6',
   },
   workTableSize: [1.5, 0.05, 1.5],
   workTablePosition: [2, 0.025, 0],
@@ -178,8 +202,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       transformMode: 'translate' as const,
 
       toolpathData: null,
+      toolpathPartId: null,
+      toolpathStale: false,
       currentLayer: 0,
       showAllLayers: false,
+      toolpathColorMode: 'type' as ToolpathColorMode,
+      toolpathColorRange: { min: 0, max: 100 } as ColorRange,
 
       simMode: 'manual' as SimMode,
       simState: {
@@ -188,6 +216,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         totalTime: 300,
         speed: 1.0,
         collisionDetected: false,
+        followTCP: false,
+        showDeposition: true,
       },
       jointAngles: defaultJointAngles,
       jointTrajectory: null,
@@ -232,7 +262,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((state) => {
           const idx = state.geometryParts.findIndex((p) => p.id === id);
           if (idx !== -1) {
+            // Detect geometry transform changes that invalidate existing toolpath
+            const hasPositionChange = updates.position !== undefined;
+            const hasRotationChange = updates.rotation !== undefined;
+            const hasScaleChange = updates.scale !== undefined;
+
             Object.assign(state.geometryParts[idx], updates);
+
+            // If position/rotation/scale changed and we have an active toolpath, mark it stale
+            if (state.toolpathData && (hasPositionChange || hasRotationChange || hasScaleChange)) {
+              state.toolpathStale = true;
+            }
           }
         }),
 
@@ -251,9 +291,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           state.geometryParts = parts;
         }),
 
-      setToolpathData: (data) =>
+      setToolpathData: (data, partId) =>
         set((state) => {
           state.toolpathData = data;
+          state.toolpathPartId = partId ?? state.selectedPartId;
+          // Reset current layer when new toolpath data is loaded
+          state.currentLayer = 0;
+          // Clear stale flag — fresh toolpath
+          state.toolpathStale = false;
+          // DEBUG: expose on window for inspection
+          (window as any).__toolpathData = data;
+        }),
+
+      setToolpathStale: (stale) =>
+        set((state) => {
+          state.toolpathStale = stale;
         }),
 
       setCurrentLayer: (layer) =>
@@ -264,6 +316,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setShowAllLayers: (show) =>
         set((state) => {
           state.showAllLayers = show;
+        }),
+
+      setToolpathColorMode: (mode) =>
+        set((state) => {
+          state.toolpathColorMode = mode;
+        }),
+
+      setToolpathColorRange: (range) =>
+        set((state) => {
+          state.toolpathColorRange = range;
         }),
 
       setSimMode: (mode) =>
@@ -337,6 +399,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         })),
         currentLayer: state.currentLayer,
         showAllLayers: state.showAllLayers,
+        toolpathColorMode: state.toolpathColorMode,
+        toolpathColorRange: state.toolpathColorRange,
         simMode: state.simMode,
         jointAngles: state.jointAngles,
       }),

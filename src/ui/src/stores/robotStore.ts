@@ -54,7 +54,7 @@ export const useRobotStore = create<RobotStoreState>()(
         state.state = { ...state.state, ...updates };
       }),
 
-    connect: async (ipAddress, port) => {
+    connect: async (_ipAddress, _port) => {
       set((state) => {
         state.isConnecting = true;
         state.state.error = null;

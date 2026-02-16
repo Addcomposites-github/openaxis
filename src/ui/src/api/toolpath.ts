@@ -31,6 +31,23 @@ export interface SlicingParams {
   infillDensity: number;
   infillPattern: string;
   processType: string;
+  // Advanced params (optional — backend falls back to defaults)
+  wallWidth?: number;
+  printSpeed?: number;
+  seamMode?: string;       // 'guided' | 'distributed' | 'random'
+  seamShape?: string;      // 'straight' | 'zigzag' | 'triangular' | 'sine'
+  seamAngle?: number;      // degrees
+  travelSpeed?: number;
+  zHop?: number;
+  retractDistance?: number;
+  retractSpeed?: number;
+  leadInDistance?: number;
+  leadInAngle?: number;
+  leadOutDistance?: number;
+  leadOutAngle?: number;
+  // Sprint 7: Strategy
+  strategy?: string;   // 'planar' | 'angled' | 'radial' | 'curve' | 'revolved'
+  sliceAngle?: number; // degrees (for angled strategy)
 }
 
 /**

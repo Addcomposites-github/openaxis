@@ -265,7 +265,9 @@ class JacobianIKSolver:
             6xN Jacobian matrix (position + orientation)
         """
         jacobian = np.zeros((6, self.n_joints))
-        delta = 1e-6
+        # Use 1e-4 for numerical stability; 1e-6 is too small and leads
+        # to floating-point noise dominating the finite-difference Jacobian.
+        delta = 1e-4
 
         # Get current end-effector frame
         current_frame = self.robot.forward_kinematics(configuration, link_name=link_name)

@@ -7,8 +7,10 @@ import { useWorkspaceStore, type CellSetup } from '../../stores/workspaceStore';
 import { useRobotStore } from '../../stores/robotStore';
 import { getRobotConfig } from '../../api/robot';
 import { checkHealth } from '../../api/client';
+import ProcessSetupSection from './ProcessSetupSection';
+import TCPSetupPanel from './TCPSetupPanel';
+import WorkFramePanel from './WorkFramePanel';
 
-type EndEffectorType = CellSetup['endEffector']['type'];
 type ExternalAxisType = CellSetup['externalAxis']['type'];
 
 export default function SetupPanel() {
@@ -16,7 +18,7 @@ export default function SetupPanel() {
   const setCellSetup = useWorkspaceStore((s) => s.setCellSetup);
   const setMode = useWorkspaceStore((s) => s.setMode);
 
-  const [activeTab, setActiveTab] = useState<'robot' | 'endeffector' | 'external' | 'worktable'>('robot');
+  const [activeTab, setActiveTab] = useState<'robot' | 'process' | 'endeffector' | 'external' | 'worktable'>('robot');
   const [backendConnected, setBackendConnected] = useState(false);
   const [robotSpecs, setRobotSpecs] = useState<{ reach: number; payload: number; dof: number }>({
     reach: 2600, payload: 200, dof: 6,
@@ -53,16 +55,6 @@ export default function SetupPanel() {
     const rot = [...cellSetup.robot.baseRotation] as [number, number, number];
     rot[axis] = value;
     setCellSetup({ ...cellSetup, robot: { ...cellSetup.robot, baseRotation: rot } });
-  };
-
-  const updateEndEffector = (type: EndEffectorType) => {
-    const presets: Record<EndEffectorType, { offset: [number, number, number, number, number, number]; mass: number }> = {
-      waam_torch: { offset: [0, 0, 0.15, 0, 0, 0], mass: 5.0 },
-      pellet_extruder: { offset: [0, 0, 0.25, 0, 0, 0], mass: 8.0 },
-      spindle: { offset: [0, 0, 0.2, 0, 0, 0], mass: 12.0 },
-      none: { offset: [0, 0, 0, 0, 0, 0], mass: 0 },
-    };
-    setCellSetup({ ...cellSetup, endEffector: { type, ...presets[type] } });
   };
 
   const updateExternalAxis = (type: ExternalAxisType) => {
@@ -109,9 +101,10 @@ export default function SetupPanel() {
         <div className="flex">
           {[
             { id: 'robot', label: 'Robot' },
-            { id: 'endeffector', label: 'End Effector' },
+            { id: 'process', label: 'Process' },
+            { id: 'endeffector', label: 'TCP / Tool' },
             { id: 'external', label: 'External Axes' },
-            { id: 'worktable', label: 'Work Table' },
+            { id: 'worktable', label: 'Work Frames' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -219,81 +212,12 @@ export default function SetupPanel() {
           </>
         )}
 
+        {activeTab === 'process' && (
+          <ProcessSetupSection />
+        )}
+
         {activeTab === 'endeffector' && (
-          <>
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 mb-3">End Effector Type</h4>
-              <div className="space-y-2">
-                {[
-                  { value: 'waam_torch', label: 'WAAM Torch', desc: 'Wire Arc Additive Manufacturing' },
-                  { value: 'pellet_extruder', label: 'Pellet Extruder', desc: 'Pellet-based printing' },
-                  { value: 'spindle', label: 'Milling Spindle', desc: 'Subtractive machining' },
-                  { value: 'none', label: 'None', desc: 'No tool attached' },
-                ].map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => updateEndEffector(option.value as EndEffectorType)}
-                    className={`w-full text-left px-4 py-3 border-2 rounded-lg transition-colors ${
-                      cellSetup.endEffector.type === option.value
-                        ? 'border-blue-600 bg-blue-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="font-medium text-sm">{option.label}</div>
-                    <div className="text-xs text-gray-600 mt-1">{option.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {cellSetup.endEffector.type !== 'none' && (
-              <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-3">TCP Offset (Tool Center Point)</h4>
-                <p className="text-xs text-gray-500 mb-3">
-                  Distance from flange to tool tip. This is where the material is deposited.
-                </p>
-                <div className="space-y-3">
-                  {(['X', 'Y', 'Z'] as const).map((axis, i) => (
-                    <div key={axis}>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
-                        {axis} Offset (m)
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="range" min="-0.5" max="0.5" step="0.005"
-                          value={cellSetup.endEffector.offset[i]}
-                          onChange={(e) => {
-                            const offset = [...cellSetup.endEffector.offset] as [number, number, number, number, number, number];
-                            offset[i] = parseFloat(e.target.value);
-                            setCellSetup({ ...cellSetup, endEffector: { ...cellSetup.endEffector, offset } });
-                          }}
-                          className="flex-1"
-                        />
-                        <span className="text-xs text-gray-600 font-mono w-16 text-right">
-                          {(cellSetup.endEffector.offset[i] * 1000).toFixed(0)} mm
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-3 bg-gray-50 p-3 rounded-lg">
-                  <div className="space-y-1 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Tool Mass:</span>
-                      <span className="font-medium">{cellSetup.endEffector.mass} kg</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">TCP Total:</span>
-                      <span className="font-medium font-mono">
-                        [{cellSetup.endEffector.offset.slice(0, 3).map(v => `${(v*1000).toFixed(0)}`).join(', ')}] mm
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </>
+          <TCPSetupPanel />
         )}
 
         {activeTab === 'external' && (
@@ -335,58 +259,7 @@ export default function SetupPanel() {
         )}
 
         {activeTab === 'worktable' && (
-          <>
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 mb-3">Work Table/Base Plate</h4>
-              <div className="space-y-3">
-                {[
-                  { label: 'Width (m)', key: 0 as const, min: 0.5, max: 3 },
-                  { label: 'Depth (m)', key: 2 as const, min: 0.5, max: 3 },
-                ].map((item) => (
-                  <div key={item.key}>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">{item.label}</label>
-                    <input
-                      type="range" min={item.min} max={item.max} step="0.1"
-                      value={cellSetup.workTableSize[item.key]}
-                      onChange={(e) => {
-                        const size = [...cellSetup.workTableSize] as [number, number, number];
-                        size[item.key] = parseFloat(e.target.value);
-                        setCellSetup({ ...cellSetup, workTableSize: size });
-                      }}
-                      className="w-full"
-                    />
-                    <div className="text-xs text-gray-600 mt-1">
-                      {cellSetup.workTableSize[item.key].toFixed(2)} m
-                    </div>
-                  </div>
-                ))}
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Distance from Robot (m)</label>
-                  <input
-                    type="range" min="0.5" max="3" step="0.1"
-                    value={cellSetup.workTablePosition[0]}
-                    onChange={(e) => {
-                      const pos = [...cellSetup.workTablePosition] as [number, number, number];
-                      pos[0] = parseFloat(e.target.value);
-                      setCellSetup({ ...cellSetup, workTablePosition: pos });
-                    }}
-                    className="w-full"
-                  />
-                  <div className="text-xs text-gray-600 mt-1">
-                    {cellSetup.workTablePosition[0].toFixed(2)} m
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg">
-              <p className="text-xs text-blue-800">
-                <strong>Tip:</strong> Your imported geometry will be placed on this table.
-                Position it within robot reach (typically 0.5-2.0m from base).
-              </p>
-            </div>
-          </>
+          <WorkFramePanel />
         )}
       </div>
 

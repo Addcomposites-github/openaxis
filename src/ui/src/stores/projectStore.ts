@@ -25,7 +25,7 @@ interface ProjectState {
 }
 
 export const useProjectStore = create<ProjectState>()(
-  immer((set, get) => ({
+  immer((set, _get) => ({
     projects: [],
     currentProject: null,
     workspaceToolpath: null,

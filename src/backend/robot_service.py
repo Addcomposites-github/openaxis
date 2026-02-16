@@ -2,14 +2,34 @@
 Robot service for OpenAxis backend.
 
 Handles robot configuration, forward/inverse kinematics, and joint limits.
+
+IK Strategy:
+  Primary: roboticstoolbox-python (Peter Corke) — production-grade, DH-based,
+           30-90µs per solve with C++ backend. Well-tested, URDF-aware.
+  Fallback: Custom numerical IK via scipy (IKSolver / JacobianIKSolver).
+
+For large toolpaths (200K+ waypoints), IK is solved in chunks (not all at once)
+to keep memory low and enable progressive streaming to the frontend.
 """
 
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# ── Production IK: roboticstoolbox-python ────────────────────────────────────
+try:
+    import numpy as np
+    from roboticstoolbox import DHRobot, RevoluteDH
+    from spatialmath import SE3
+    RTB_AVAILABLE = True
+except ImportError:
+    RTB_AVAILABLE = False
+    print("Warning: roboticstoolbox-python not installed. Using fallback IK solver.")
+
+# ── Fallback IK: custom compas-based solvers ─────────────────────────────────
 try:
     from openaxis.core.config import ConfigManager, RobotConfig
     from openaxis.core.robot import RobotLoader, RobotInstance
@@ -22,6 +42,43 @@ except ImportError as e:
     CONFIG_AVAILABLE = False
 
 
+def _create_irb6700_dh() -> 'DHRobot':
+    """Create ABB IRB 6700 DH model from URDF-derived parameters.
+
+    DH parameters extracted from config/urdf/abb_irb6700.urdf:
+      d1=0.780m  a1=0.320m  (base to shoulder)
+      a2=1.125m             (upper arm)
+      a3=0.200m  d4=1.1425m (forearm with wrist offset)
+      d6=0.200m             (wrist to flange)
+
+    This is a standard 6R industrial manipulator with 3 intersecting
+    wrist axes — the same kinematic family as most ABB, KUKA, Fanuc robots.
+    """
+    if not RTB_AVAILABLE:
+        return None
+
+    robot = DHRobot([
+        RevoluteDH(d=0.780,   a=0.320, alpha=-np.pi / 2),  # J1: base rotation
+        RevoluteDH(d=0,       a=1.125, alpha=0),             # J2: shoulder
+        RevoluteDH(d=0,       a=0.200, alpha=-np.pi / 2),    # J3: elbow
+        RevoluteDH(d=1.1425,  a=0,     alpha=np.pi / 2),     # J4: wrist 1
+        RevoluteDH(d=0,       a=0,     alpha=-np.pi / 2),    # J5: wrist 2
+        RevoluteDH(d=0.200,   a=0,     alpha=0),              # J6: wrist 3
+    ], name='ABB_IRB_6700')
+
+    # Joint limits from URDF (radians)
+    robot.qlim = np.array([
+        [-2.96706, 2.96706],   # J1
+        [-1.13446, 1.48353],   # J2
+        [-3.14159, 1.22173],   # J3
+        [-5.23599, 5.23599],   # J4
+        [-2.26893, 2.26893],   # J5
+        [-6.28319, 6.28319],   # J6
+    ]).T
+
+    return robot
+
+
 class RobotService:
     """Service for robot configuration and kinematics operations."""
 
@@ -30,6 +87,11 @@ class RobotService:
         self._ik_solver: Optional[Any] = None
         self._jacobian_solver: Optional[Any] = None
         self._config_manager: Optional[Any] = None
+
+        # Production IK: roboticstoolbox DH model (always available, no URDF loading needed)
+        self._rtb_robot = _create_irb6700_dh()
+        if self._rtb_robot:
+            print(f"[RobotService] Production IK ready: {self._rtb_robot.name} (roboticstoolbox)")
 
         if CONFIG_AVAILABLE and config_dir:
             try:
@@ -182,46 +244,118 @@ class RobotService:
 
     def solve_toolpath_ik(
         self, waypoints: List[List[float]], initial_guess: Optional[List[float]] = None,
-        tcp_offset: Optional[List[float]] = None, max_waypoints: int = 500,
+        tcp_offset: Optional[List[float]] = None, max_waypoints: int = 0,
+        chunk_start: int = 0, chunk_size: int = 0,
     ) -> Dict[str, Any]:
-        """Solve IK for a sequence of waypoints (batch operation for simulation).
+        """Solve IK for a sequence of waypoints using roboticstoolbox-python.
 
-        Uses full 6-DOF IK with proper tool orientation (torch pointing down
-        for WAAM). Each solution seeds the next for smooth joint trajectories.
+        Uses Peter Corke's roboticstoolbox (production-grade, DH-based IK solver)
+        with Levenberg-Marquardt optimization. Each solution seeds the next for
+        smooth, continuous joint trajectories.
 
-        When len(waypoints) > max_waypoints, uniformly samples down to
-        max_waypoints, solves the sample, then expands results back to full size
-        by nearest-neighbor mapping.
+        Supports two modes:
+          1. Full batch (default): Solves ALL waypoints. Suitable for <50K points.
+          2. Chunked: Set chunk_start + chunk_size to solve a window.
+             Frontend requests chunks progressively as simulation advances.
 
         The tcp_offset [x, y, z, rx, ry, rz] (meters/radians) shifts the IK target
         so the solver finds the flange position that places the tool tip at each waypoint.
         """
-        if not self._ik_solver:
-            return {"trajectory": [], "error": "IK solver not loaded"}
-
         total = len(waypoints)
 
-        # --- Sampling: pick evenly-spaced indices if too many waypoints ---
-        if total > max_waypoints:
-            import numpy as _np
-            sample_indices = _np.linspace(0, total - 1, max_waypoints, dtype=int).tolist()
-            sampled_wps = [waypoints[i] for i in sample_indices]
+        # Determine which waypoints to solve
+        if chunk_size > 0:
+            start = max(0, chunk_start)
+            end = min(total, start + chunk_size)
+            solve_wps = waypoints[start:end]
         else:
-            sample_indices = list(range(total))
-            sampled_wps = waypoints
-
-        # Solve IK on the (possibly sampled) subset
-        sampled_traj = []
-        sampled_reach = []
-        # Start from a reasonable home pose if no initial guess provided
-        if initial_guess is None:
-            initial_guess = [0.0, 0.0, 0.5, 0.0, -0.5, 0.0]
-        current_guess = initial_guess
+            start = 0
+            end = total
+            solve_wps = waypoints
 
         # TCP offset: shift target so flange reaches the right position
         tcp_z = tcp_offset[2] if tcp_offset and len(tcp_offset) >= 3 else 0.0
 
-        for i, wp in enumerate(sampled_wps):
+        # ── Primary: roboticstoolbox-python DH solver ─────────────────────────
+        if RTB_AVAILABLE and self._rtb_robot is not None:
+            return self._solve_rtb(solve_wps, tcp_z, initial_guess, start, total)
+
+        # ── Fallback: custom compas IK solver ─────────────────────────────────
+        if self._ik_solver:
+            return self._solve_compas(solve_wps, tcp_z, initial_guess, start, total)
+
+        return {"trajectory": [], "error": "No IK solver available"}
+
+    def _solve_rtb(
+        self, waypoints: list, tcp_z: float,
+        initial_guess: Optional[list], chunk_start: int, total: int,
+    ) -> Dict[str, Any]:
+        """Solve IK using roboticstoolbox-python (production-grade DH solver)."""
+        t0 = time.perf_counter()
+        robot = self._rtb_robot
+
+        # Initial seed: reasonable home pose for ABB IRB 6700
+        if initial_guess and len(initial_guess) >= 6:
+            q_seed = np.array(initial_guess[:6])
+        else:
+            q_seed = np.array([0.0, -0.5, 0.5, 0.0, -0.5, 0.0])
+
+        trajectory = []
+        reachability = []
+        successes = 0
+
+        for wp in waypoints:
+            # Build target: tool pointing straight down (-Z in robot frame)
+            target = SE3(wp[0], wp[1], wp[2] + tcp_z) * SE3.RPY(0, 180, 0, unit='deg')
+
+            sol = robot.ikine_LM(target, q0=q_seed)
+
+            if sol.success:
+                q = sol.q.tolist()
+                trajectory.append(q)
+                reachability.append(True)
+                q_seed = sol.q  # Seed next solve for continuity
+                successes += 1
+            else:
+                # Use previous seed as fallback (maintains continuity)
+                trajectory.append(q_seed.tolist())
+                reachability.append(False)
+
+        dt = time.perf_counter() - t0
+        n = len(waypoints)
+        print(
+            f"[IK-RTB] Solved {successes}/{n} waypoints in {dt:.2f}s "
+            f"({dt/max(n,1)*1000:.1f}ms/pt), chunk_start={chunk_start}"
+        )
+
+        return {
+            "trajectory": trajectory,
+            "reachability": reachability,
+            "reachableCount": successes,
+            "totalPoints": total,
+            "solvedPoints": n,
+            "chunkStart": chunk_start,
+            "reachabilityPercent": (successes / max(n, 1) * 100),
+            "solverTime": round(dt, 3),
+            "solver": "roboticstoolbox",
+        }
+
+    def _solve_compas(
+        self, waypoints: list, tcp_z: float,
+        initial_guess: Optional[list], chunk_start: int, total: int,
+    ) -> Dict[str, Any]:
+        """Fallback IK using custom compas-based solver."""
+        t0 = time.perf_counter()
+
+        if initial_guess is None:
+            initial_guess = [0.0, 0.0, 0.5, 0.0, -0.5, 0.0]
+        current_guess = initial_guess
+
+        trajectory = []
+        reachability = []
+        successes = 0
+
+        for wp in waypoints:
             flange_point = Point(wp[0], wp[1], wp[2] + tcp_z)
             target_frame = Frame(flange_point, Vector(1, 0, 0), Vector(0, -1, 0))
 
@@ -235,37 +369,31 @@ class RobotService:
 
             if solution is not None:
                 joint_vals = list(solution.joint_values)
-                sampled_traj.append(joint_vals)
-                sampled_reach.append(True)
+                trajectory.append(joint_vals)
+                reachability.append(True)
                 current_guess = joint_vals
+                successes += 1
             else:
-                sampled_traj.append(current_guess if current_guess else [0.0] * self._ik_solver.n_joints)
-                sampled_reach.append(False)
+                trajectory.append(current_guess if current_guess else [0.0] * 6)
+                reachability.append(False)
 
-        # --- Expand back to full size via nearest-sample mapping ---
-        if total > max_waypoints:
-            trajectory = []
-            reachability = []
-            sample_idx_ptr = 0
-            for wi in range(total):
-                # Advance pointer to nearest sample index
-                while (sample_idx_ptr < len(sample_indices) - 1 and
-                       abs(sample_indices[sample_idx_ptr + 1] - wi) < abs(sample_indices[sample_idx_ptr] - wi)):
-                    sample_idx_ptr += 1
-                trajectory.append(sampled_traj[sample_idx_ptr])
-                reachability.append(sampled_reach[sample_idx_ptr])
-        else:
-            trajectory = sampled_traj
-            reachability = sampled_reach
+        dt = time.perf_counter() - t0
+        n = len(waypoints)
+        print(
+            f"[IK-Compas] Solved {successes}/{n} waypoints in {dt:.2f}s, "
+            f"chunk_start={chunk_start}"
+        )
 
-        reachable_count = sum(reachability)
         return {
             "trajectory": trajectory,
             "reachability": reachability,
-            "reachableCount": reachable_count,
+            "reachableCount": successes,
             "totalPoints": total,
-            "sampledPoints": len(sampled_wps),
-            "reachabilityPercent": (reachable_count / total * 100) if total else 0,
+            "solvedPoints": n,
+            "chunkStart": chunk_start,
+            "reachabilityPercent": (successes / max(n, 1) * 100),
+            "solverTime": round(dt, 3),
+            "solver": "compas",
         }
 
     def _default_robot_config(self) -> Dict[str, Any]:

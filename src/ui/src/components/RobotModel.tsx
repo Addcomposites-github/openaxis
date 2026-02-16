@@ -10,6 +10,10 @@ interface RobotModelProps {
   urdfPath: string;
   meshPath?: string;
   jointAngles?: { [key: string]: number };
+  /** TCP offset [x, y, z, rx, ry, rz] in meters/degrees — from endEffector config */
+  tcpOffset?: [number, number, number, number, number, number];
+  /** Whether to show the TCP visualization frame */
+  showTCP?: boolean;
 }
 
 export default function RobotModel({
@@ -18,10 +22,13 @@ export default function RobotModel({
   urdfPath,
   meshPath = '',
   jointAngles = {},
+  tcpOffset = [0, 0, 0.15, 0, 0, 0],
+  showTCP = true,
 }: RobotModelProps) {
   const { scene } = useThree();
   const robotRef = useRef<any>(null);       // The actual URDF robot (for setJointValue)
   const wrapperRef = useRef<THREE.Group | null>(null); // The outer group (for position/rotation)
+  const tcpMarkerRef = useRef<THREE.Group | null>(null); // TCP visualization group
   const [isLoaded, setIsLoaded] = useState(false);
 
   // Use refs for position/rotation to prevent URDF reload when these change.
@@ -32,12 +39,10 @@ export default function RobotModel({
   rotationRef.current = rotation;
 
   useEffect(() => {
-    console.log('RobotModel: Starting load...', { urdfPath, meshPath });
 
     const manager = new THREE.LoadingManager();
 
     manager.onLoad = () => {
-      console.log('RobotModel: All resources loaded');
     };
 
     manager.onError = (url) => {
@@ -84,7 +89,6 @@ export default function RobotModel({
     loader.load(
       urdfPath,
       (robot) => {
-        console.log('RobotModel: URDF loaded successfully');
 
         // Remove previous wrapper if it exists
         if (wrapperRef.current) {
@@ -102,9 +106,33 @@ export default function RobotModel({
         scene.add(wrapper);
         wrapperRef.current = wrapper;
         robotRef.current = robot;
-        setIsLoaded(true);
 
-        console.log('RobotModel: Added to scene at position:', positionRef.current);
+        // Create TCP visualization marker (sphere + axes)
+        const tcpGroup = new THREE.Group();
+        tcpGroup.name = 'tcp-marker';
+
+        // Small orange sphere at TCP
+        const sphereGeom = new THREE.SphereGeometry(0.012, 16, 16);
+        const sphereMat = new THREE.MeshBasicMaterial({
+          color: 0xff6600,
+          transparent: true,
+          opacity: 0.9,
+          depthTest: false,
+        });
+        const sphere = new THREE.Mesh(sphereGeom, sphereMat);
+        sphere.renderOrder = 999;
+        tcpGroup.add(sphere);
+
+        // XYZ axes helper at TCP
+        const axes = new THREE.AxesHelper(0.06);
+        axes.renderOrder = 999;
+        (axes.material as THREE.Material).depthTest = false;
+        tcpGroup.add(axes);
+
+        scene.add(tcpGroup);
+        tcpMarkerRef.current = tcpGroup;
+
+        setIsLoaded(true);
       },
       undefined,
       (err) => {
@@ -117,6 +145,9 @@ export default function RobotModel({
       if (wrapperRef.current) {
         scene.remove(wrapperRef.current);
       }
+      if (tcpMarkerRef.current) {
+        scene.remove(tcpMarkerRef.current);
+      }
     };
   }, [scene, urdfPath, meshPath]); // Only reload URDF when these change
 
@@ -126,6 +157,12 @@ export default function RobotModel({
   const jointAnglesRef = useRef(jointAngles);
   jointAnglesRef.current = jointAngles;
   const prevAnglesRef = useRef<Record<string, number>>({});
+
+  // Keep refs to TCP offset and showTCP for useFrame access
+  const tcpOffsetRef = useRef(tcpOffset);
+  tcpOffsetRef.current = tcpOffset;
+  const showTCPRef = useRef(showTCP);
+  showTCPRef.current = showTCP;
 
   useFrame(() => {
     if (!robotRef.current || !isLoaded) return;
@@ -139,16 +176,78 @@ export default function RobotModel({
         break;
       }
     }
-    if (!changed) return;
 
-    for (const [name, val] of Object.entries(angles)) {
-      try {
-        robotRef.current.setJointValue(name, val);
-      } catch (_e) {
-        // Joint may not exist — ignore silently
+    if (changed) {
+      for (const [name, val] of Object.entries(angles)) {
+        try {
+          robotRef.current.setJointValue(name, val);
+        } catch (_e) {
+          // Joint may not exist — ignore silently
+        }
       }
+      prevAnglesRef.current = { ...angles };
     }
-    prevAnglesRef.current = { ...angles };
+
+    // Update TCP marker position — find the last link's world position
+    if (tcpMarkerRef.current && showTCPRef.current) {
+      tcpMarkerRef.current.visible = true;
+      try {
+        // Find the end-effector link (last joint's child link)
+        const robot = robotRef.current;
+
+        // Use the known kinematic chain order for ABB robots: joint_6 is
+        // always the last joint.  Fallback: iterate all joint names sorted
+        // and pick the last one so the code works for non-ABB URDFs too.
+        let lastLink: THREE.Object3D | null = null;
+        const joints = robot.joints || {};
+
+        // Try known last joint names first (ABB, KUKA, UR conventions)
+        const knownLastJoints = ['joint_6', 'joint6', 'J6', 'wrist_3_joint'];
+        for (const name of knownLastJoints) {
+          if (joints[name]) {
+            lastLink = joints[name].children?.[0] || joints[name];
+            break;
+          }
+        }
+
+        // Fallback: sort joint names naturally and use the last
+        if (!lastLink) {
+          const jointNames = Object.keys(joints).sort();
+          if (jointNames.length > 0) {
+            const lastJointName = jointNames[jointNames.length - 1];
+            const lastJoint = joints[lastJointName];
+            if (lastJoint) {
+              lastLink = lastJoint.children?.[0] || lastJoint;
+            }
+          }
+        }
+
+        if (lastLink) {
+          // Get world position of the last link
+          const worldPos = new THREE.Vector3();
+          lastLink.getWorldPosition(worldPos);
+
+          // Apply TCP offset in the link's local frame
+          const offset = tcpOffsetRef.current;
+          const localOffset = new THREE.Vector3(offset[0], offset[1], offset[2]);
+
+          // Get the link's world quaternion to transform the offset
+          const worldQuat = new THREE.Quaternion();
+          lastLink.getWorldQuaternion(worldQuat);
+          localOffset.applyQuaternion(worldQuat);
+
+          tcpMarkerRef.current.position.copy(worldPos).add(localOffset);
+
+          // Apply TCP orientation
+          tcpMarkerRef.current.quaternion.copy(worldQuat);
+        }
+      } catch (_e) {
+        // If anything fails, hide the marker
+        tcpMarkerRef.current.visible = false;
+      }
+    } else if (tcpMarkerRef.current) {
+      tcpMarkerRef.current.visible = false;
+    }
   });
 
   // Update position and rotation on the wrapper (without reloading the robot)

@@ -18,7 +18,7 @@ export interface Project {
 }
 
 export type ProjectStatus = 'draft' | 'ready' | 'in_progress' | 'completed' | 'failed';
-export type ProcessType = 'waam' | 'pellet_extrusion' | 'milling' | 'hybrid';
+export type ProcessType = 'waam' | 'pellet_extrusion' | 'milling' | 'wire_laser' | 'concrete' | 'hybrid';
 
 export interface ProjectSettings {
   units: 'metric' | 'imperial';

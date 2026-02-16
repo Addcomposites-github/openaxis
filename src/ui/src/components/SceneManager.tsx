@@ -22,7 +22,10 @@ import { useLoader } from '@react-three/fiber';
 import RobotModel from './RobotModel';
 import BuildPlate from './BuildPlate';
 import ToolpathRenderer from './ToolpathRenderer';
+import DepositionVisualization from './DepositionVisualization';
+import TestHarness from './TestHarness';
 import { useWorkspaceStore, type GeometryPartData } from '../stores/workspaceStore';
+import { useWorkFrameStore } from '../stores/workFrameStore';
 import { MM_TO_M, toolpathPointToScene } from '../utils/units';
 import type { Waypoint } from '../api/simulation';
 
@@ -245,61 +248,198 @@ function ToolpathTrail({ waypoints, currentTime }: { waypoints: Waypoint[]; curr
   );
 }
 
-/** Emits [SCENE_CHECK] console info periodically for closed-loop verification. */
-function SceneCheckLogger() {
-  const geometryParts = useWorkspaceStore((s) => s.geometryParts);
+/**
+ * Render-loop simulation timer.
+ *
+ * Drives simState.currentTime at the correct speed using requestAnimationFrame
+ * (via useFrame), producing perfectly smooth 60fps updates.
+ * Replaces the 10fps setInterval in SimulationPanel.
+ */
+function SimulationClock() {
+  const simState = useWorkspaceStore((s) => s.simState);
+  const setSimState = useWorkspaceStore((s) => s.setSimState);
+
+  // Use refs to avoid re-creating the frame callback on every state change
+  const stateRef = useRef(simState);
+  stateRef.current = simState;
+  const setRef = useRef(setSimState);
+  setRef.current = setSimState;
+
+  useFrame((_, delta) => {
+    const s = stateRef.current;
+    if (!s.isRunning || s.currentTime >= s.totalTime) return;
+
+    // Clamp delta to avoid huge jumps when tab is backgrounded
+    const dt = Math.min(delta, 0.1);
+    const newTime = Math.min(s.currentTime + s.speed * dt, s.totalTime);
+
+    // Only update if time actually changed (avoid unnecessary re-renders)
+    if (Math.abs(newTime - s.currentTime) > 0.0001) {
+      setRef.current({ currentTime: newTime });
+    }
+
+    // Auto-stop at end
+    if (newTime >= s.totalTime) {
+      setRef.current({ isRunning: false });
+    }
+  });
+
+  return null;
+}
+
+/** Exposes R3F scene/camera globally for external diagnostic scripts. */
+function SceneStateExposer() {
   const r3fState = useThree();
   const { camera, scene } = r3fState;
-  const lastLog = useRef(0);
 
-  // Expose scene, camera, and R3F state globally for debugging
   useEffect(() => {
     (window as any).__r3fScene = scene;
     (window as any).__r3fCamera = camera;
     (window as any).__r3fState = r3fState;
-    (window as any).__r3fInvalidate = r3fState.invalidate;
-    console.log('[SceneCheckLogger] R3F state exposed. frameloop:', r3fState.frameloop);
     return () => {
       delete (window as any).__r3fScene;
       delete (window as any).__r3fCamera;
       delete (window as any).__r3fState;
-      delete (window as any).__r3fInvalidate;
     };
   }, [scene, camera, r3fState]);
 
-  useFrame(() => {
-    const now = Date.now();
-    if (now - lastLog.current < 5000) return; // Log every 5 seconds max
-    lastLog.current = now;
+  return null;
+}
 
-    // Compute geometry bounds in meters
-    let geoMin = [Infinity, Infinity, Infinity];
-    let geoMax = [-Infinity, -Infinity, -Infinity];
-    for (const part of geometryParts) {
-      if (part.visible && part.position && part.dimensions) {
-        const px = (part.position.x || 0) * MM_TO_M;
-        const py = (part.position.y || 0) * MM_TO_M;
-        const pz = (part.position.z || 0) * MM_TO_M;
-        const dx = (part.dimensions.x || 0) * MM_TO_M / 2;
-        const dy = (part.dimensions.y || 0) * MM_TO_M / 2;
-        const dz = (part.dimensions.z || 0) * MM_TO_M / 2;
-        geoMin = [Math.min(geoMin[0], px - dx), Math.min(geoMin[1], py - dy), Math.min(geoMin[2], pz - dz)];
-        geoMax = [Math.max(geoMax[0], px + dx), Math.max(geoMax[1], py + dy), Math.max(geoMax[2], pz + dz)];
-      }
+/**
+ * Smoothly moves the OrbitControls target to follow the TCP position.
+ * Uses LERP for smooth camera tracking instead of hard snapping.
+ */
+function FollowTCPCamera({ tcpPos }: { tcpPos: [number, number, number] }) {
+  const { controls, camera } = useThree();
+  const targetRef = useRef(new THREE.Vector3());
+  const initialized = useRef(false);
+
+  useFrame(() => {
+    if (!controls || !(controls as any).target) return;
+
+    const orbitTarget = (controls as any).target as THREE.Vector3;
+    const tcp = new THREE.Vector3(tcpPos[0], tcpPos[1], tcpPos[2]);
+
+    if (!initialized.current) {
+      // First frame: snap camera close to TCP
+      orbitTarget.copy(tcp);
+      const offset = new THREE.Vector3(0.5, 0.3, 0.5);
+      camera.position.copy(tcp).add(offset);
+      (controls as any).update();
+      initialized.current = true;
+      targetRef.current.copy(tcp);
+      return;
     }
 
-    console.info('[SCENE_CHECK]', {
-      buildPlateBounds: { min: [-0.5, 0, -0.5], max: [0.5, 1, 0.5] }, // 1m plate in meters
-      geometryBounds: geoMin[0] !== Infinity
-        ? { min: geoMin, max: geoMax }
-        : null,
-      cameraPosition: [camera.position.x, camera.position.y, camera.position.z],
-      partsCount: geometryParts.length,
-      allInMeters: true,
-    });
+    // Smooth follow: lerp the orbit target towards TCP
+    targetRef.current.lerp(tcp, 0.1);
+    orbitTarget.copy(targetRef.current);
+    (controls as any).update();
   });
 
+  // Reset when unmounted
+  useEffect(() => {
+    return () => {
+      initialized.current = false;
+    };
+  }, []);
+
   return null;
+}
+
+// ─── Work Frame Gizmo ────────────────────────────────────────────────────────
+
+/**
+ * Renders a coordinate axes gizmo for a work frame.
+ * Shows XYZ arrows at the frame origin with color coding (R=X, G=Y, B=Z).
+ * Also renders a semi-transparent platform matching the frame size.
+ */
+function WorkFrameGizmo({ frameId, active }: { frameId: string; active: boolean }) {
+  const frame = useWorkFrameStore((s) => s.frames.find((f) => f.id === frameId));
+  const getScenePosition = useWorkFrameStore((s) => s.getFrameScenePosition);
+
+  if (!frame || !frame.visible) return null;
+
+  const scenePos = getScenePosition(frameId);
+  const axisLength = 0.3; // 30cm axes
+  const axisThickness = active ? 3 : 1.5;
+
+  // Euler rotation (degrees to radians, Z-up to Y-up)
+  const rx = (frame.rotation[0] * Math.PI) / 180;
+  const ry = (frame.rotation[1] * Math.PI) / 180;
+  const rz = (frame.rotation[2] * Math.PI) / 180;
+
+  return (
+    <group position={scenePos} rotation={[rx, rz, -ry]}>
+      {/* Platform surface */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+        <planeGeometry args={[frame.size[0], frame.size[2]]} />
+        <meshStandardMaterial
+          color={frame.color}
+          transparent
+          opacity={active ? 0.15 : 0.08}
+          side={2} // DoubleSide
+        />
+      </mesh>
+
+      {/* Platform edge ring */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.001, 0]}>
+        <ringGeometry args={[
+          Math.min(frame.size[0], frame.size[2]) * 0.48,
+          Math.min(frame.size[0], frame.size[2]) * 0.5,
+          32,
+        ]} />
+        <meshBasicMaterial color={frame.color} transparent opacity={active ? 0.6 : 0.3} />
+      </mesh>
+
+      {/* X-axis (Red) */}
+      <Line
+        points={[[0, 0, 0], [axisLength, 0, 0]]}
+        color="#ef4444"
+        lineWidth={axisThickness}
+      />
+      <mesh position={[axisLength + 0.02, 0, 0]}>
+        <sphereGeometry args={[0.015, 8, 8]} />
+        <meshBasicMaterial color="#ef4444" />
+      </mesh>
+
+      {/* Y-axis (Green) — scene Y = world Z */}
+      <Line
+        points={[[0, 0, 0], [0, axisLength, 0]]}
+        color="#22c55e"
+        lineWidth={axisThickness}
+      />
+      <mesh position={[0, axisLength + 0.02, 0]}>
+        <sphereGeometry args={[0.015, 8, 8]} />
+        <meshBasicMaterial color="#22c55e" />
+      </mesh>
+
+      {/* Z-axis (Blue) — scene Z = -world Y */}
+      <Line
+        points={[[0, 0, 0], [0, 0, axisLength]]}
+        color="#3b82f6"
+        lineWidth={axisThickness}
+      />
+      <mesh position={[0, 0, axisLength + 0.02]}>
+        <sphereGeometry args={[0.015, 8, 8]} />
+        <meshBasicMaterial color="#3b82f6" />
+      </mesh>
+
+      {/* Origin marker */}
+      <mesh>
+        <sphereGeometry args={[active ? 0.025 : 0.018, 16, 16]} />
+        <meshStandardMaterial
+          color={frame.color}
+          emissive={frame.color}
+          emissiveIntensity={active ? 0.8 : 0.3}
+        />
+      </mesh>
+
+      {/* Frame name label (using a small billboard sprite would be ideal,
+          but for now a simple colored dot distinguishes frames) */}
+    </group>
+  );
 }
 
 // ─── Main SceneManager ──────────────────────────────────────────────────────
@@ -319,9 +459,21 @@ export default function SceneManager() {
   const trajectory = useWorkspaceStore((s) => s.trajectory);
   const simMode = useWorkspaceStore((s) => s.simMode);
   const reachability = useWorkspaceStore((s) => s.reachability);
+  const toolpathColorMode = useWorkspaceStore((s) => s.toolpathColorMode);
+  const toolpathColorRange = useWorkspaceStore((s) => s.toolpathColorRange);
+  const toolpathPartId = useWorkspaceStore((s) => s.toolpathPartId);
 
   const setSelectedPartId = useWorkspaceStore((s) => s.setSelectedPartId);
   const updateGeometryPart = useWorkspaceStore((s) => s.updateGeometryPart);
+
+  // Work frames
+  const workFrames = useWorkFrameStore((s) => s.frames);
+  const activeFrameId = useWorkFrameStore((s) => s.activeFrameId);
+
+  // Debug: expose live state for diagnostic scripts
+  useEffect(() => {
+    (window as any).__simDiag = { trajectory, jointTrajectory, simState, jointAngles, reachability };
+  }, [trajectory, jointTrajectory, simState, jointAngles, reachability]);
 
   // TransformControls target
   const [targetMesh, setTargetMesh] = useState<THREE.Object3D | null>(null);
@@ -344,6 +496,7 @@ export default function SceneManager() {
     cellSetup.workTablePosition[1] + cellSetup.workTableSize[1] / 2,
     cellSetup.workTablePosition[2],
   ], [cellSetup.workTablePosition, cellSetup.workTableSize]);
+
 
   // ── Active joint angles (interpolated for simulation playback) ──────────
 
@@ -412,8 +565,18 @@ export default function SceneManager() {
 
   return (
     <>
-      {/* SCENE_CHECK logger for closed-loop verification */}
-      <SceneCheckLogger />
+      {/* Simulation clock — drives animation in the render loop */}
+      <SimulationClock />
+
+      {/* Follow-TCP camera updater */}
+      {simState.followTCP && mode === 'simulation' && tcpPos && (
+        <FollowTCPCamera tcpPos={tcpPos} />
+      )}
+
+      {/* Expose R3F state for diagnostic scripts */}
+      <SceneStateExposer />
+      {/* Test API for programmatic scene verification (dev only) */}
+      <TestHarness />
 
       {/* Lighting — always present */}
       <ambientLight intensity={0.6} />
@@ -448,6 +611,15 @@ export default function SceneManager() {
         <meshStandardMaterial color="#475569" metalness={0.5} roughness={0.5} />
       </mesh>
 
+      {/* Work Frame Gizmos — coordinate axes at each frame origin */}
+      {workFrames.map((frame) => (
+        <WorkFrameGizmo
+          key={frame.id}
+          frameId={frame.id}
+          active={frame.id === activeFrameId}
+        />
+      ))}
+
       {/* Build Plate — on top of the work table, in the robot's working area */}
       <group position={buildPlateOrigin}>
         <BuildPlate size={{ x: 1000, y: 1000 }} maxHeight={1000} visible={true} />
@@ -466,6 +638,8 @@ export default function SceneManager() {
         urdfPath="/config/urdf/abb_irb6700.urdf"
         meshPath="/config/"
         jointAngles={robotJointAngles}
+        tcpOffset={cellSetup.endEffector.offset}
+        showTCP={true}
       />
 
       {/* External Axis Visualization */}
@@ -592,29 +766,54 @@ export default function SceneManager() {
           />
         )}
 
-        {/* Toolpath Visualization — visible in toolpath & simulation */}
-        {showToolpath && toolpathData?.segments?.length > 0 && (
-          <ToolpathRenderer
-            segments={toolpathData.segments}
-            currentLayer={currentLayer}
-            showAllLayers={showAllLayers}
-            colorByType={true}
-            reachability={reachability}
-          />
-        )}
+        {/* ── Toolpath-related visuals (toolpath, trail, deposition, TCP marker) ──
+            The toolpath is generated at mesh origin (centered XY, bottom at Z=0).
+            We offset ALL toolpath visuals by the part's position so they align
+            with the geometry mesh in the scene. */}
+        {(() => {
+          const tp = toolpathPartId ? geometryParts.find(p => p.id === toolpathPartId) : geometryParts[0];
+          const tpPos: [number, number, number] = tp?.position
+            ? [(tp.position.x || 0) * MM_TO_M, (tp.position.y || 0) * MM_TO_M, (tp.position.z || 0) * MM_TO_M]
+            : [0, 0, 0];
+          return (
+            <group position={tpPos}>
+              {/* Toolpath lines */}
+              {showToolpath && toolpathData && toolpathData.segments && toolpathData.segments.length > 0 && (
+                <ToolpathRenderer
+                  segments={toolpathData.segments}
+                  currentLayer={currentLayer}
+                  showAllLayers={showAllLayers}
+                  colorByType={true}
+                  reachability={reachability}
+                  colorMode={toolpathColorMode}
+                  colorRange={toolpathColorRange}
+                />
+              )}
 
-        {/* Simulation Trail */}
-        {showSimTrail && (
-          <ToolpathTrail waypoints={waypoints} currentTime={simState.currentTime} />
-        )}
+              {/* Simulation Trail */}
+              {showSimTrail && (
+                <ToolpathTrail waypoints={waypoints} currentTime={simState.currentTime} />
+              )}
 
-        {/* TCP target indicator during simulation */}
-        {mode === 'simulation' && tcpPos && (
-          <mesh position={tcpPos}>
-            <sphereGeometry args={[0.03, 16, 16]} />
-            <meshStandardMaterial color="#22c55e" emissive="#22c55e" emissiveIntensity={0.5} />
-          </mesh>
-        )}
+              {/* Deposition Visualization (growing part) */}
+              {mode === 'simulation' && simMode === 'toolpath' && waypoints.length > 0 && (
+                <DepositionVisualization
+                  waypoints={waypoints}
+                  currentTime={simState.currentTime}
+                  visible={simState.showDeposition ?? true}
+                />
+              )}
+
+              {/* TCP target indicator during simulation */}
+              {mode === 'simulation' && tcpPos && (
+                <mesh position={tcpPos}>
+                  <sphereGeometry args={[0.03, 16, 16]} />
+                  <meshStandardMaterial color="#22c55e" emissive="#22c55e" emissiveIntensity={0.5} />
+                </mesh>
+              )}
+            </group>
+          );
+        })()}
       </group>
 
       {/* Camera auto-framing in geometry mode */}

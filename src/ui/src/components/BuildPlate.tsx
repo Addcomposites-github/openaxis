@@ -1,4 +1,3 @@
-import React from 'react';
 import { Grid, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { MM_TO_M } from '../utils/units';

@@ -40,6 +40,10 @@ export interface TrajectoryIKResult {
   reachableCount: number;
   totalPoints: number;
   reachabilityPercent: number;
+  solvedPoints?: number;
+  chunkStart?: number;
+  solverTime?: number;
+  solver?: string;
   error?: string;
 }
 
@@ -132,19 +136,32 @@ export async function computeIK(
 }
 
 /**
- * Solve IK for a full toolpath trajectory (batch)
- * @param tcpOffset - [x, y, z, rx, ry, rz] in meters/radians — shifts target so flange
- *                    reaches the position that places the tool tip at each waypoint
+ * Solve IK for a toolpath trajectory chunk using the backend's production solver.
+ *
+ * The backend uses roboticstoolbox-python (Peter Corke) — a production-grade
+ * DH-based IK solver running Levenberg-Marquardt optimization. Each solution
+ * seeds the next for smooth joint trajectories.
+ *
+ * For large toolpaths, use chunkStart + chunkSize to solve in windows
+ * (e.g., 2000 waypoints at a time as the simulation advances).
+ *
+ * @param tcpOffset - [x, y, z, rx, ry, rz] in meters/radians
+ * @param chunkStart - Start index for chunked solving (0 = full batch)
+ * @param chunkSize - Number of waypoints to solve (0 = all)
  */
 export async function solveTrajectoryIK(
   waypoints: [number, number, number][],
   initialGuess?: number[],
   tcpOffset?: number[],
+  chunkStart: number = 0,
+  chunkSize: number = 0,
 ): Promise<TrajectoryIKResult> {
   const response = await apiClient.post<ApiResponse<TrajectoryIKResult>>('/api/robot/solve-trajectory', {
     waypoints,
     initialGuess,
     tcpOffset,
+    chunkStart,
+    chunkSize,
   }, { timeout: 300000 }); // 5 min — IK for large toolpaths can be slow
   if (response.data.status === 'success' && response.data.data) {
     return response.data.data;

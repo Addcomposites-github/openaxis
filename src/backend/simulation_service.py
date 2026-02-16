@@ -45,27 +45,46 @@ class SimulationService:
         waypoints = []
         segment_info = []
         current_time = 0.0
+        prev_end_point = None  # Track the last point to add inter-segment travel time
 
         for seg in toolpath_data.get("segments", []):
             points = seg.get("points", [])
             speed = seg.get("speed", 50.0)  # mm/s
             seg_type = seg.get("type", "perimeter")
 
+            if not points:
+                continue
+
+            # Add travel time between segments when there's a gap
+            if prev_end_point is not None:
+                first_pt = points[0]
+                dx = first_pt[0] - prev_end_point[0]
+                dy = first_pt[1] - prev_end_point[1]
+                dz = first_pt[2] - prev_end_point[2]
+                gap_dist = (dx**2 + dy**2 + dz**2) ** 0.5
+                if gap_dist > 0.1:  # mm threshold
+                    # Use travel speed (faster than print speed) for gaps
+                    travel_speed = max(speed, 200.0)  # At least 200 mm/s for travel
+                    current_time += gap_dist / travel_speed
+
             for i, pt in enumerate(points):
-                waypoints.append({
-                    "position": pt,
-                    "time": current_time,
-                    "segmentType": seg_type,
-                    "layer": seg.get("layer", 0),
-                })
                 if i > 0:
-                    # Calculate time from distance and speed
+                    # Calculate time from distance and speed BEFORE adding waypoint
                     prev = points[i - 1]
                     dx = pt[0] - prev[0]
                     dy = pt[1] - prev[1]
                     dz = pt[2] - prev[2]
                     dist = (dx**2 + dy**2 + dz**2) ** 0.5
                     current_time += dist / max(speed, 0.1)
+
+                waypoints.append({
+                    "position": pt,
+                    "time": current_time,
+                    "segmentType": seg_type,
+                    "layer": seg.get("layer", 0),
+                })
+
+            prev_end_point = points[-1]
 
         simulation = {
             "id": sim_id,

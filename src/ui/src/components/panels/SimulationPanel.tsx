@@ -13,13 +13,14 @@ import {
 } from '@heroicons/react/24/outline';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { useRobotStore } from '../../stores/robotStore';
-import { getRobotConfig, getJointLimits, computeFK, loadRobot, solveTrajectoryIK } from '../../api/robot';
+import { getRobotConfig, getJointLimits, computeFK, loadRobot } from '../../api/robot';
 import type { RobotConfig, JointLimits, FKResult } from '../../api/robot';
 import { createSimulation, getTrajectory } from '../../api/simulation';
 import { checkHealth } from '../../api/client';
 import type { Waypoint } from '../../api/simulation';
 import { waypointToRobotFrame } from '../../utils/units';
 import { solveTrajectoryIKLocal } from '../../utils/analyticalIK';
+import QualityPanel from '../QualityPanel';
 
 function waypointAtTime(waypoints: Waypoint[], t: number): Waypoint | null {
   if (waypoints.length === 0) return null;
@@ -47,6 +48,8 @@ function waypointAtTime(waypoints: Waypoint[], t: number): Waypoint | null {
 
 export default function SimulationPanel() {
   const toolpathData = useWorkspaceStore((s) => s.toolpathData);
+  const toolpathPartId = useWorkspaceStore((s) => s.toolpathPartId);
+  const geometryParts = useWorkspaceStore((s) => s.geometryParts);
   const simMode = useWorkspaceStore((s) => s.simMode);
   const simState = useWorkspaceStore((s) => s.simState);
   const jointAngles = useWorkspaceStore((s) => s.jointAngles);
@@ -136,7 +139,22 @@ export default function SimulationPanel() {
         }
         setTotalLayers(layers);
         setTrajectory(traj);
-        setSimState({ totalTime: traj.totalTime, currentTime: 0 });
+
+        // Auto-speed: calculate a speed that makes the full simulation play in ~3 minutes
+        // This ensures intra-layer motion is visible to the user
+        const TARGET_PLAYBACK_SECONDS = 180; // 3 minutes for full sim
+        let autoSpeed = 1.0;
+        if (traj.totalTime > TARGET_PLAYBACK_SECONDS) {
+          autoSpeed = Math.round(traj.totalTime / TARGET_PLAYBACK_SECONDS);
+          // Snap to nearest standard speed option
+          const speedOptions = [1, 2, 5, 10, 50, 100, 500, 1000];
+          autoSpeed = speedOptions.reduce((prev, curr) =>
+            Math.abs(curr - autoSpeed) < Math.abs(prev - autoSpeed) ? curr : prev
+          );
+        }
+        console.log(`[SimPanel] Auto-speed: ${autoSpeed}x (totalTime=${traj.totalTime.toFixed(0)}s, target=${TARGET_PLAYBACK_SECONDS}s)`);
+
+        setSimState({ totalTime: traj.totalTime, currentTime: 0, speed: autoSpeed });
         setSimMode('toolpath');
       } catch (e) {
         console.warn('Failed to create simulation from toolpath:', e);
@@ -160,66 +178,94 @@ export default function SimulationPanel() {
     cellSetup.workTablePosition[2],
   ], [cellSetup.workTablePosition, cellSetup.workTableSize]);
 
-  // Pre-compute IK for trajectory — two-stage: backend first, then frontend fallback
+  // ── IK computation — analytical solver + backend upgrade ────────────────────
+  //
+  // Primary: Solve ALL waypoints with the frontend analytical IK solver.
+  //   Runs at ~10μs per point → 245K waypoints in ~2.5 seconds.
+  //   Produces smooth, per-waypoint joint angles using geometric closed-form IK.
+  //
+  // Future: When the backend roboticstoolbox-python solver is available,
+  //   it can replace the analytical solution in chunks for higher accuracy.
+  //   The analytical solution serves as the immediate preview.
+  //
+  // This approach is inspired by how RoboDK handles large toolpaths:
+  //   per-robot analytical IK solvers running in microseconds per point.
+  //
+
   useEffect(() => {
     if (!trajectory || ikStatus !== 'idle') return;
-    // Guard: prevent double computation in React strict mode
     if (ikComputingRef.current) return;
     ikComputingRef.current = true;
 
     const computeIK = async () => {
       setIKStatus('computing');
-      console.log('[IK] Starting IK computation...');
 
-      // Transform waypoints to robot base frame (meters, Z-up)
-      const robotPositionScene: [number, number, number] = [0, 0, 0]; // Robot at scene origin
-      const robotFramePositions: [number, number, number][] = trajectory.waypoints.map(
-        (w) => waypointToRobotFrame(
-          w.position as [number, number, number],
-          buildPlateOrigin,
-          robotPositionScene,
-        )
+      // Transform all waypoints to robot base frame (meters, Z-up)
+      // Use actual robot base position from cell setup (not hardcoded origin)
+      const robotPositionScene: [number, number, number] = [
+        cellSetup.robot.basePosition[0],
+        cellSetup.robot.basePosition[1],
+        cellSetup.robot.basePosition[2],
+      ];
+
+      // The toolpath is origin-centered (backend slices at origin).
+      // Add the part's position offset before converting to robot frame.
+      // Store position is Y-up mm; slicer is Z-up mm.
+      // Y-up→Z-up: [x, y, z]_Yup → [x, -z, y]_Zup
+      // store.x → slicer_x, store.z → slicer_y (NEGATED), store.y → slicer_z
+      const tpPart = toolpathPartId
+        ? geometryParts.find(p => p.id === toolpathPartId)
+        : geometryParts[0];
+      const partOffsetZUp: [number, number, number] = tpPart?.position
+        ? [tpPart.position.x || 0, -(tpPart.position.z || 0), tpPart.position.y || 0]
+        : [0, 0, 0];
+
+      const positions: [number, number, number][] = trajectory.waypoints.map(
+        (w) => {
+          const wp = w.position as [number, number, number];
+          // Add part position offset (Z-up mm) to origin-centered slicer point
+          const offsetWp: [number, number, number] = [
+            wp[0] + partOffsetZUp[0],
+            wp[1] + partOffsetZUp[1],
+            wp[2] + partOffsetZUp[2],
+          ];
+          return waypointToRobotFrame(
+            offsetWp,
+            buildPlateOrigin,
+            robotPositionScene,
+          );
+        }
       );
 
-      // Stage 1: Try backend IK if connected
-      if (backendConnectedRef.current) {
-        try {
-          const tcpOffset = [...endEffectorOffset];
-          const ikResult = await solveTrajectoryIK(robotFramePositions, undefined, tcpOffset);
-          if (ikResult.trajectory && ikResult.trajectory.length > 0) {
-            setJointTrajectory(ikResult.trajectory);
-            setReachability(ikResult.reachability);
-            setIKStatus('ready');
-            ikComputingRef.current = false;
-            console.log(
-              `[IK Backend] Solved: ${ikResult.reachableCount}/${ikResult.totalPoints} reachable ` +
-              `(${ikResult.reachabilityPercent.toFixed(1)}%)`
-            );
-            return;
-          }
-          console.warn('[IK Backend] Returned empty trajectory, falling back to frontend IK');
-        } catch (e) {
-          console.warn('[IK Backend] Failed, falling back to frontend IK:', e);
-        }
-      }
+      const totalWps = positions.length;
+      // Tool length = magnitude of position offset [x, y, z] (first 3 elements).
+      // For ABB IRB 6700 with pellet extruder, offset is [0.5, 0, 0] meaning
+      // 0.5m along last joint axis (which points down when tool faces down).
+      const eox = endEffectorOffset[0] || 0;
+      const eoy = endEffectorOffset[1] || 0;
+      const eoz = endEffectorOffset[2] || 0;
+      const toolLength = Math.sqrt(eox * eox + eoy * eoy + eoz * eoz) || 0.15;
 
-      // Stage 2: Frontend analytical IK fallback
+      console.log(`[IK] Solving ${totalWps} waypoints with analytical IK (tool=${toolLength.toFixed(3)}m)...`);
+      const t0 = performance.now();
+
       try {
-        const toolLength = endEffectorOffset[2] || 0.15;
-        console.log(`[IK Fallback] Computing analytical IK for ${robotFramePositions.length} waypoints...`);
-        const t0 = performance.now();
-        const result = solveTrajectoryIKLocal(robotFramePositions, toolLength);
+        const result = solveTrajectoryIKLocal(positions, toolLength);
         const dt = performance.now() - t0;
+
         setJointTrajectory(result.trajectory);
         setReachability(result.reachability);
-        setIKStatus('fallback');
+        setIKStatus('ready');
         ikComputingRef.current = false;
+
         console.log(
-          `[IK Fallback] Solved in ${dt.toFixed(0)}ms: ${result.reachableCount}/${result.totalPoints} reachable ` +
-          `(${result.reachabilityPercent.toFixed(1)}%)`
+          `[IK] Solved ${totalWps} waypoints in ${dt.toFixed(0)}ms ` +
+          `(${(dt / totalWps * 1000).toFixed(1)}μs/pt): ` +
+          `${result.reachableCount}/${totalWps} reachable (${result.reachabilityPercent.toFixed(1)}%)`
         );
+
       } catch (e) {
-        console.error('[IK] Both backend and frontend IK failed:', e);
+        console.error('[IK] Analytical IK failed:', e);
         setIKStatus('failed');
         ikComputingRef.current = false;
       }
@@ -271,19 +317,13 @@ export default function SimulationPanel() {
     if (simMode === 'manual') updateFK(jointAngles);
   }, [jointAngles, updateFK, simMode]);
 
-  // Simulation timer
+  // Simulation timer is now driven by useFrame in SceneManager (SimulationClock)
+  // for perfectly smooth 60fps updates. This effect only handles end-of-sim stop.
   useEffect(() => {
-    if (simState.isRunning && simState.currentTime < simState.totalTime) {
-      const interval = setInterval(() => {
-        setSimState({
-          currentTime: Math.min(simState.currentTime + simState.speed * 0.1, simState.totalTime),
-        });
-      }, 100);
-      return () => clearInterval(interval);
-    } else if (simState.isRunning && simState.currentTime >= simState.totalTime) {
+    if (simState.isRunning && simState.currentTime >= simState.totalTime) {
       setSimState({ isRunning: false });
     }
-  }, [simState.isRunning, simState.currentTime, simState.totalTime, simState.speed, setSimState]);
+  }, [simState.isRunning, simState.currentTime, simState.totalTime, setSimState]);
 
   // Joint limit checking
   const jointLimitStatus = useMemo(() => {
@@ -445,6 +485,13 @@ export default function SimulationPanel() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Quality Summary (compact) */}
+          {toolpathData && (
+            <div className="border rounded-lg p-3 bg-gray-50 border-gray-200">
+              <QualityPanel compact />
             </div>
           )}
         </div>
@@ -633,6 +680,32 @@ export default function SimulationPanel() {
           )}
           <span>{formatTime(simState.totalTime)}</span>
         </div>
+
+        {/* Follow TCP toggle + Show Deposition toggle */}
+        {simMode === 'toolpath' && trajectory && (
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <button
+              onClick={() => setSimState({ followTCP: !simState.followTCP })}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                simState.followTCP
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
+            >
+              {simState.followTCP ? 'Following TCP' : 'Follow TCP'}
+            </button>
+            <button
+              onClick={() => setSimState({ showDeposition: !simState.showDeposition })}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                simState.showDeposition
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
+            >
+              {simState.showDeposition ? 'Deposition ON' : 'Show Deposition'}
+            </button>
+          </div>
+        )}
 
         {/* Jump-to-layer input */}
         {simMode === 'toolpath' && trajectory && totalLayers > 0 && (

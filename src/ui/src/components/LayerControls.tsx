@@ -17,11 +17,13 @@ interface LayerControlsProps {
 
 export default function LayerControls({
   totalLayers,
-  currentLayer,
+  currentLayer: rawCurrentLayer,
   onLayerChange,
   showAllLayers,
   onShowAllLayersChange
 }: LayerControlsProps) {
+  // Clamp currentLayer to valid range to prevent stale persisted values
+  const currentLayer = Math.max(0, Math.min(rawCurrentLayer, totalLayers - 1));
   const [isPlaying, setIsPlaying] = useState(false);
   const [playSpeed, setPlaySpeed] = useState(1.0); // layers per second
 

@@ -1,6 +1,13 @@
 import { useMemo } from 'react';
 import { Line } from '@react-three/drei';
 import { toolpathPointToScene } from '../utils/units';
+import {
+  type ToolpathColorMode,
+  type ColorRange,
+  type SegmentColorInfo,
+  getColorForMode,
+  TYPE_COLORS,
+} from '../utils/toolpathColorMaps';
 
 export interface ToolpathSegment {
   type: string;
@@ -16,17 +23,13 @@ interface ToolpathRendererProps {
   showAllLayers?: boolean;
   colorByType?: boolean;
   reachability?: boolean[] | null;
+  /** Color overlay mode (defaults to 'type' if colorByType is true). */
+  colorMode?: ToolpathColorMode;
+  /** Min/max range for continuous color modes. */
+  colorRange?: ColorRange;
 }
 
-/* ── colour look-up by segment type ─────────────────────────────── */
-const TYPE_COLORS: Record<string, [number, number, number]> = {
-  travel: [0.533, 0.533, 0.533],     // grey
-  perimeter: [0.231, 0.510, 0.965],  // blue
-  infill: [0.133, 0.773, 0.369],     // green
-  support: [0.961, 0.620, 0.043],    // amber
-  raft: [0.659, 0.333, 0.969],       // purple
-  default: [0.937, 0.267, 0.267],    // red
-};
+/* ── colour look-up by segment type (legacy fallback) ──────────── */
 
 function colorForType(type: string): [number, number, number] {
   return TYPE_COLORS[type] || TYPE_COLORS.default;
@@ -61,15 +64,88 @@ const MAX_VERTICES_PER_CHUNK = 20_000;
  *
  * Large toolpaths are split into chunks of ≤ MAX_VERTICES_PER_CHUNK vertices
  * to avoid WebGL buffer size issues. Each chunk is a separate <Line> component.
+ *
+ * Supports 7 color overlay modes via the colorMode prop:
+ * - type: segment type categorical coloring
+ * - speed: viridis gradient by feed rate
+ * - layer_time: viridis gradient by layer time
+ * - deposition: viridis gradient by extrusion rate
+ * - reachability: binary green/red
+ * - layer: rainbow gradient by layer number
+ * - z_height: viridis gradient by Z coordinate
  */
 export default function ToolpathRenderer({
   segments,
   currentLayer,
   showAllLayers = false,
   colorByType = true,
-  // reachability reserved for future use
-  reachability: _reachability,
+  reachability,
+  colorMode,
+  colorRange,
 }: ToolpathRendererProps) {
+  // Determine the effective color mode: explicit prop > legacy colorByType flag
+  const effectiveMode: ToolpathColorMode = colorMode ?? (colorByType ? 'type' : 'type');
+
+  // Auto-compute range from visible segments if not provided
+  const effectiveRange = useMemo<ColorRange>(() => {
+    if (colorRange && (colorRange.min !== 0 || colorRange.max !== 100)) {
+      return colorRange;
+    }
+
+    // Auto-range based on mode
+    if (!segments || segments.length === 0) return { min: 0, max: 100 };
+
+    const visible = showAllLayers
+      ? segments
+      : segments.filter((s) => s.layer === (currentLayer ?? 1));
+
+    switch (effectiveMode) {
+      case 'speed': {
+        let min = Infinity, max = -Infinity;
+        for (const seg of visible) {
+          if (seg.type === 'travel') continue;
+          if (seg.speed > 0) {
+            min = Math.min(min, seg.speed);
+            max = Math.max(max, seg.speed);
+          }
+        }
+        return min <= max ? { min, max } : { min: 0, max: 1000 };
+      }
+      case 'deposition': {
+        let min = Infinity, max = -Infinity;
+        for (const seg of visible) {
+          if (seg.type === 'travel') continue;
+          if (seg.extrusionRate > 0) {
+            min = Math.min(min, seg.extrusionRate);
+            max = Math.max(max, seg.extrusionRate);
+          }
+        }
+        return min <= max ? { min, max } : { min: 0, max: 10 };
+      }
+      case 'layer': {
+        let min = Infinity, max = -Infinity;
+        for (const seg of visible) {
+          min = Math.min(min, seg.layer);
+          max = Math.max(max, seg.layer);
+        }
+        return min <= max ? { min, max } : { min: 0, max: 1 };
+      }
+      case 'z_height': {
+        let min = Infinity, max = -Infinity;
+        for (const seg of visible) {
+          for (const pt of seg.points) {
+            const z = pt[2] ?? 0;
+            min = Math.min(min, z);
+            max = Math.max(max, z);
+          }
+        }
+        return min <= max ? { min, max } : { min: 0, max: 100 };
+      }
+      default:
+        return colorRange ?? { min: 0, max: 100 };
+    }
+  }, [segments, currentLayer, showAllLayers, effectiveMode, colorRange]);
+
   const chunks = useMemo<LineChunk[]>(() => {
     if (!segments || segments.length === 0) return [];
 
@@ -88,6 +164,24 @@ export default function ToolpathRenderer({
 
     if (totalPairs === 0) return [];
 
+    // Pre-compute the starting global index for each visible segment
+    // (We need this for reachability mapping which is indexed across ALL segments)
+    const segmentStartIdx: number[] = [];
+    if (reachability && reachability.length > 0) {
+      // Build a mapping: for each segment in the full list, find its point offset
+      let idx = 0;
+      const fullOffsets = new Map<number, number>();
+      for (let si = 0; si < segments.length; si++) {
+        fullOffsets.set(si, idx);
+        idx += segments[si].points.length;
+      }
+      // Now map visible segments back to their full indices
+      for (const seg of visible) {
+        const fullIdx = segments.indexOf(seg);
+        segmentStartIdx.push(fullOffsets.get(fullIdx) ?? 0);
+      }
+    }
+
     // Build chunks — each chunk has at most MAX_VERTICES_PER_CHUNK vertices.
     // Since we use segments=true, vertices come in pairs: [startA, endA, startB, endB, ...]
     // We must never split a pair across chunks.
@@ -95,10 +189,11 @@ export default function ToolpathRenderer({
     let curPts: [number, number, number][] = [];
     let curCols: [number, number, number][] = [];
 
-    for (const seg of visible) {
+    for (let vi = 0; vi < visible.length; vi++) {
+      const seg = visible[vi];
       if (seg.points.length < 2) continue;
 
-      const c = colorByType ? colorForType(seg.type) : TYPE_COLORS.default;
+      const reachOffset = segmentStartIdx[vi] ?? 0;
 
       for (let pi = 0; pi < seg.points.length - 1; pi++) {
         // Check if adding this pair would exceed the chunk limit
@@ -111,8 +206,39 @@ export default function ToolpathRenderer({
         const a = toolpathPointToScene(seg.points[pi]);
         const b = toolpathPointToScene(seg.points[pi + 1]);
 
+        // Compute color based on mode
+        let cA: [number, number, number];
+        let cB: [number, number, number];
+
+        if (effectiveMode === 'type') {
+          // Fast path: same color for entire segment
+          const c = colorForType(seg.type);
+          cA = c;
+          cB = c;
+        } else {
+          // Per-point color using color map
+          const infoA: SegmentColorInfo = {
+            type: seg.type,
+            speed: seg.speed,
+            extrusionRate: seg.extrusionRate,
+            layer: seg.layer,
+            pointZ: seg.points[pi][2] ?? 0,
+            reachable: reachability ? reachability[reachOffset + pi] : undefined,
+          };
+          const infoB: SegmentColorInfo = {
+            type: seg.type,
+            speed: seg.speed,
+            extrusionRate: seg.extrusionRate,
+            layer: seg.layer,
+            pointZ: seg.points[pi + 1][2] ?? 0,
+            reachable: reachability ? reachability[reachOffset + pi + 1] : undefined,
+          };
+          cA = getColorForMode(infoA, effectiveMode, effectiveRange);
+          cB = getColorForMode(infoB, effectiveMode, effectiveRange);
+        }
+
         curPts.push(a, b);
-        curCols.push(c, c);
+        curCols.push(cA, cB);
       }
     }
 
@@ -123,11 +249,11 @@ export default function ToolpathRenderer({
 
     console.log(
       `[ToolpathRenderer] Built ${result.length} chunks from ${totalPairs} line segments, ` +
-      `${visible.length}/${segments.length} path segments visible`
+      `${visible.length}/${segments.length} path segments visible, mode=${effectiveMode}`
     );
 
     return result;
-  }, [segments, currentLayer, showAllLayers, colorByType]);
+  }, [segments, currentLayer, showAllLayers, effectiveMode, effectiveRange, reachability]);
 
   if (chunks.length === 0) return null;
 

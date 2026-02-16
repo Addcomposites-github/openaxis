@@ -17,11 +17,18 @@ import {
   MagnifyingGlassIcon,
   HomeIcon,
   TrashIcon,
+  ChevronDoubleRightIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { useWorkspaceStore, storeGeometryFile, getGeometryFile, type GeometryPartData } from '../../stores/workspaceStore';
 import { useProjectStore } from '../../stores/projectStore';
 import SlicingParametersPanel, { type SlicingParameters } from '../SlicingParametersPanel';
-import { centerOnPlate, checkBuildVolume, getDimensions, formatDimensions } from '../../utils/geometryUtils';
+import AdvancedSlicingPanel, { type SlicingParams, defaultSlicingParams } from '../AdvancedSlicingPanel';
+import SlicingStrategySelector, { type SlicingStrategy } from '../SlicingStrategySelector';
+import MeshOperationsPanel from '../MeshOperationsPanel';
+import { centerOnPlate, checkBuildVolume, getDimensions, formatDimensions, computePlateOffsetAfterRotation } from '../../utils/geometryUtils';
 import { generateToolpath, uploadGeometryFile, checkHealth } from '../../api/toolpath';
 
 export default function GeometryPanel() {
@@ -34,21 +41,27 @@ export default function GeometryPanel() {
   const setSelectedPartId = useWorkspaceStore((s) => s.setSelectedPartId);
   const setTransformMode = useWorkspaceStore((s) => s.setTransformMode);
   const setToolpathData = useWorkspaceStore((s) => s.setToolpathData);
+  const toolpathStale = useWorkspaceStore((s) => s.toolpathStale);
   const setMode = useWorkspaceStore((s) => s.setMode);
-
-  const { currentProject } = useProjectStore();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [notification, setNotification] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [useAdvancedSlicing, setUseAdvancedSlicing] = useState(false);
   const [slicingParams, setSlicingParams] = useState<SlicingParameters>({
     layerHeight: 2.0,
     extrusionWidth: 2.5,
     wallCount: 2,
     infillDensity: 0.2,
-    infillPattern: 'lines',
+    infillPattern: 'grid',
     processType: 'waam',
   });
+  const [advancedParams, setAdvancedParams] = useState<SlicingParams>(defaultSlicingParams);
+  const [slicingStrategy, setSlicingStrategy] = useState<SlicingStrategy>('planar');
+  const [sliceAngle, setSliceAngle] = useState(30);
+  const [supportEnabled, setSupportEnabled] = useState(false);
+  const [supportThreshold, setSupportThreshold] = useState(45);
+  const [meshOpsExpanded, setMeshOpsExpanded] = useState(false);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -173,12 +186,30 @@ export default function GeometryPanel() {
     const part = parts.find((p) => p.id === selectedPart);
     if (!part) return;
 
-    // Reset to origin — geometry was already centered and bottom-aligned
-    // by centerOnPlate() at import time. Resetting to 0,0,0 restores on-plate position.
-    updateGeometryPart(selectedPart, {
-      position: { x: 0, y: 0, z: 0 },
-    });
-    setNotification('Part centered on build plate');
+    // Geometry vertices were centered and bottom-aligned at import time
+    // (by centerOnPlate() in geometryUtils). When position is [0,0,0] and
+    // rotation is [0,0,0], the part bottom is exactly at Y=0 (plate surface).
+    //
+    // If the part has been rotated, its bounding box changes and we need to
+    // recompute the Y offset to place the bottom on the plate.
+    const rot = part.rotation || { x: 0, y: 0, z: 0 };
+    const hasRotation = rot.x !== 0 || rot.y !== 0 || rot.z !== 0;
+
+    if (hasRotation && part.dimensions) {
+      // Compute exact Y offset using rotated bounding box corners
+      const yOffset = computePlateOffsetAfterRotation(part.dimensions, rot);
+      updateGeometryPart(selectedPart, {
+        position: { x: 0, y: yOffset, z: 0 },
+      });
+      setNotification('Part placed on build plate');
+    } else {
+      // No rotation: reset to origin restores import-time alignment
+      updateGeometryPart(selectedPart, {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+      });
+      setNotification('Part centered on build plate');
+    }
     setTimeout(() => setNotification(null), 2000);
   };
 
@@ -234,9 +265,49 @@ export default function GeometryPanel() {
       // Convert store position (Y-up mm) to slicer position (Z-up mm).
       // Scene/store: X=left/right, Y=height, Z=depth
       // Slicer:      X=left/right, Y=depth,  Z=height
-      // Mapping: slicer_x = store_x, slicer_y = -store_z, slicer_z = store_y
-      const slicerPos = { x: pos.x, y: -pos.z, z: pos.y };
-      const toolpathData = await generateToolpath(geometryPath, slicingParams, slicerPos);
+      // Mapping: slicer_x = store_x, slicer_y = store_z, slicer_z = store_y
+      const slicerPos = { x: pos.x, y: pos.z, z: pos.y };
+
+      console.log('[TOOLPATH-DEBUG] Store position (Y-up mm):', JSON.stringify(pos));
+      console.log('[TOOLPATH-DEBUG] Slicer position (Z-up mm):', JSON.stringify(slicerPos));
+      console.log('[TOOLPATH-DEBUG] Part dimensions:', JSON.stringify(part.dimensions));
+
+      // Build API params — merge advanced params if in advanced mode
+      const apiParams = useAdvancedSlicing
+        ? {
+            layerHeight: advancedParams.layerHeight,
+            extrusionWidth: advancedParams.lineWidth,
+            wallCount: advancedParams.wallCount,
+            infillDensity: advancedParams.infillDensity / 100, // UI uses 0-100%, API uses 0-1
+            infillPattern: advancedParams.infillPattern,
+            processType: slicingParams.processType,
+            // Advanced params
+            wallWidth: advancedParams.wallWidth,
+            printSpeed: advancedParams.printSpeed,
+            seamMode: advancedParams.seamMode,
+            seamShape: advancedParams.seamShape,
+            seamAngle: advancedParams.seamAngle,
+            travelSpeed: advancedParams.travelSpeed,
+            zHop: advancedParams.zHop,
+            retractDistance: advancedParams.retractDistance,
+            retractSpeed: advancedParams.retractSpeed,
+            leadInDistance: advancedParams.leadInDistance,
+            leadInAngle: advancedParams.leadInAngle,
+            leadOutDistance: advancedParams.leadOutDistance,
+            leadOutAngle: advancedParams.leadOutAngle,
+          }
+        : slicingParams;
+
+      // Attach strategy info + support config
+      const finalParams = {
+        ...apiParams,
+        strategy: slicingStrategy,
+        ...(slicingStrategy === 'angled' ? { sliceAngle } : {}),
+        supportEnabled,
+        supportThreshold,
+      };
+
+      const toolpathData = await generateToolpath(geometryPath, finalParams, slicerPos);
 
       // Store in workspace & project store
       setToolpathData(toolpathData);
@@ -471,10 +542,95 @@ export default function GeometryPanel() {
         )}
       </div>
 
+      {/* Mesh Operations (collapsible) */}
+      <div className="border-t border-gray-200">
+        <button
+          onClick={() => setMeshOpsExpanded(!meshOpsExpanded)}
+          className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-1.5">
+            <WrenchScrewdriverIcon className="w-4 h-4 text-gray-500" />
+            <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Mesh Operations</h3>
+          </div>
+          {meshOpsExpanded ? (
+            <ChevronDownIcon className="w-4 h-4 text-gray-500" />
+          ) : (
+            <ChevronRightIcon className="w-4 h-4 text-gray-500" />
+          )}
+        </button>
+        {meshOpsExpanded && (
+          <div className="px-4 pb-3">
+            <MeshOperationsPanel />
+          </div>
+        )}
+      </div>
+
       {/* Slicing Parameters & Generate */}
       <div className="border-t border-gray-200">
-        <div className="p-4 max-h-96 overflow-y-auto">
-          <SlicingParametersPanel parameters={slicingParams} onChange={setSlicingParams} />
+        {/* Basic / Advanced toggle */}
+        <div className="flex items-center justify-between px-4 pt-3 pb-1">
+          <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Slicing</h3>
+          <button
+            onClick={() => setUseAdvancedSlicing(!useAdvancedSlicing)}
+            className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded-md border transition-colors ${
+              useAdvancedSlicing
+                ? 'border-blue-500 bg-blue-50 text-blue-700'
+                : 'border-gray-300 text-gray-600 hover:border-gray-400'
+            }`}
+          >
+            <ChevronDoubleRightIcon className="w-3 h-3" />
+            <span>{useAdvancedSlicing ? 'Advanced' : 'Basic'}</span>
+          </button>
+        </div>
+        <div className="p-4 max-h-96 overflow-y-auto space-y-3">
+          {/* Slicing Strategy Selector */}
+          <SlicingStrategySelector
+            strategy={slicingStrategy}
+            onChange={setSlicingStrategy}
+            angleParam={sliceAngle}
+            onAngleChange={setSliceAngle}
+          />
+
+          {/* Support Generation Toggle */}
+          <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={supportEnabled}
+                onChange={(e) => setSupportEnabled(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-xs font-medium text-gray-700">Enable Support Structures</span>
+            </label>
+            {supportEnabled && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-gray-600">Overhang Threshold</label>
+                  <span className="text-xs text-gray-500">{supportThreshold}°</span>
+                </div>
+                <input
+                  type="range"
+                  min="20"
+                  max="80"
+                  step="5"
+                  value={supportThreshold}
+                  onChange={(e) => setSupportThreshold(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                />
+                <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                  <span>20°</span>
+                  <span>80°</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Parameter panels */}
+          {useAdvancedSlicing ? (
+            <AdvancedSlicingPanel params={advancedParams} onChange={setAdvancedParams} />
+          ) : (
+            <SlicingParametersPanel parameters={slicingParams} onChange={setSlicingParams} />
+          )}
         </div>
         <div className="border-t border-gray-200 p-4 bg-gray-50">
           <button
@@ -483,16 +639,24 @@ export default function GeometryPanel() {
             className={`w-full flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
               isGenerating || !selectedPart
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
+                : toolpathStale
+                  ? 'bg-amber-500 text-white hover:bg-amber-600'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
             }`}
           >
             <AdjustmentsHorizontalIcon className="w-5 h-5" />
             <span className="text-sm font-medium">
-              {isGenerating ? 'Generating...' : 'Generate Toolpath'}
+              {isGenerating ? 'Generating...' : toolpathStale ? 'Regenerate Toolpath' : 'Generate Toolpath'}
             </span>
           </button>
-          <p className="text-xs text-gray-500 text-center mt-2">
-            {selectedPart ? 'Slice geometry into manufacturing path' : 'Select a part to generate toolpath'}
+          <p className="text-xs text-center mt-2">
+            {toolpathStale ? (
+              <span className="text-amber-600 font-medium">Part moved — toolpath needs regeneration</span>
+            ) : selectedPart ? (
+              <span className="text-gray-500">Slice geometry into manufacturing path</span>
+            ) : (
+              <span className="text-gray-500">Select a part to generate toolpath</span>
+            )}
           </p>
         </div>
       </div>

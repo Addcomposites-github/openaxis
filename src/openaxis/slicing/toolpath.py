@@ -59,6 +59,7 @@ class ToolpathSegment:
     flow_rate: float = 1.0
     temperature: float = 0.0
     is_retract: bool = False
+    direction: str = "cw"  # 'cw' or 'ccw' — contour winding direction
     metadata: dict = field(default_factory=dict)
 
     def get_length(self) -> float:
@@ -100,6 +101,7 @@ class ToolpathSegment:
             flow_rate=self.flow_rate,
             temperature=self.temperature,
             is_retract=self.is_retract,
+            direction="ccw" if self.direction == "cw" else "cw",
             metadata=self.metadata.copy(),
         )
 

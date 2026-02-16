@@ -17,7 +17,7 @@ interface SimulationStoreState extends SimulationState {
 }
 
 export const useSimulationStore = create<SimulationStoreState>()(
-  immer((set, get) => ({
+  immer((set, _get) => ({
     isRunning: false,
     isPaused: false,
     currentTime: 0,

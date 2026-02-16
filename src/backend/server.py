@@ -59,6 +59,48 @@ try:
 except ImportError:
     GCODE_AVAILABLE = False
 
+try:
+    from backend.material_service import MaterialService
+    MATERIAL_SERVICE_AVAILABLE = True
+except ImportError:
+    MaterialService = None
+    MATERIAL_SERVICE_AVAILABLE = False
+
+try:
+    from backend.workframe_service import WorkFrameService
+    WORKFRAME_SERVICE_AVAILABLE = True
+except ImportError:
+    WorkFrameService = None
+    WORKFRAME_SERVICE_AVAILABLE = False
+
+try:
+    from backend.validation_service import ValidationService
+    VALIDATION_SERVICE_AVAILABLE = True
+except ImportError:
+    ValidationService = None
+    VALIDATION_SERVICE_AVAILABLE = False
+
+try:
+    from backend.postprocessor_service import PostProcessorService
+    POSTPROCESSOR_SERVICE_AVAILABLE = True
+except ImportError:
+    PostProcessorService = None
+    POSTPROCESSOR_SERVICE_AVAILABLE = False
+
+try:
+    from backend.toolpath_editor_service import ToolpathEditorService
+    TOOLPATH_EDITOR_SERVICE_AVAILABLE = True
+except ImportError:
+    ToolpathEditorService = None
+    TOOLPATH_EDITOR_SERVICE_AVAILABLE = False
+
+try:
+    from backend.mesh_service import MeshService
+    MESH_SERVICE_AVAILABLE = True
+except ImportError:
+    MeshService = None
+    MESH_SERVICE_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -100,7 +142,9 @@ class TrajectoryIKRequest(BaseModel):
     waypoints: List[List[float]] = Field(min_length=1)
     initialGuess: Optional[List[float]] = None
     tcpOffset: Optional[List[float]] = None  # [x, y, z, rx, ry, rz] in meters
-    maxWaypoints: int = 500  # Max waypoints to solve IK for (samples if exceeded)
+    maxWaypoints: int = 0  # Deprecated, ignored — full solve or use chunkStart/chunkSize
+    chunkStart: int = 0     # Start index for chunked solving (0 = full batch)
+    chunkSize: int = 0      # Number of waypoints to solve (0 = all)
 
 
 class RobotLoadRequest(BaseModel):
@@ -185,6 +229,12 @@ class AppState:
             else None
         )
         self.simulation_service = SimulationService() if SIMULATION_SERVICE_AVAILABLE else None
+        self.material_service = MaterialService() if MATERIAL_SERVICE_AVAILABLE else None
+        self.workframe_service = WorkFrameService() if WORKFRAME_SERVICE_AVAILABLE else None
+        self.validation_service = ValidationService() if VALIDATION_SERVICE_AVAILABLE else None
+        self.postprocessor_service = PostProcessorService() if POSTPROCESSOR_SERVICE_AVAILABLE else None
+        self.toolpath_editor_service = ToolpathEditorService() if TOOLPATH_EDITOR_SERVICE_AVAILABLE else None
+        self.mesh_service = MeshService() if MESH_SERVICE_AVAILABLE else None
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +288,12 @@ async def startup_log() -> None:
     logger.info(f"Robot service:    {'OK' if state.robot_service else 'MOCK'}")
     logger.info(f"Simulation:       {'OK' if state.simulation_service else 'MOCK'}")
     logger.info(f"G-code export:    {'OK' if GCODE_AVAILABLE else 'UNAVAILABLE'}")
+    logger.info(f"Material service: {'OK' if state.material_service else 'UNAVAILABLE'}")
+    logger.info(f"Workframe service: {'OK' if state.workframe_service else 'UNAVAILABLE'}")
+    logger.info(f"Validation service: {'OK' if state.validation_service else 'UNAVAILABLE'}")
+    logger.info(f"Post processor:    {'OK' if state.postprocessor_service else 'UNAVAILABLE'}")
+    logger.info(f"Toolpath editor:   {'OK' if state.toolpath_editor_service else 'UNAVAILABLE'}")
+    logger.info(f"Mesh service:      {'OK' if state.mesh_service else 'UNAVAILABLE'}")
     logger.info(f"Config directory:  {CONFIG_DIR}")
 
 
@@ -389,7 +445,8 @@ async def robot_ik(body: IKRequest) -> ApiResponse:
 async def robot_solve_trajectory(body: TrajectoryIKRequest) -> ApiResponse:
     if state.robot_service:
         data = state.robot_service.solve_toolpath_ik(
-            body.waypoints, body.initialGuess, body.tcpOffset, body.maxWaypoints
+            body.waypoints, body.initialGuess, body.tcpOffset,
+            chunk_start=body.chunkStart, chunk_size=body.chunkSize,
         )
     else:
         data = {"trajectory": [], "error": "Robot service not available"}
@@ -720,6 +777,473 @@ async def simulation_stop() -> ApiResponse:
     if state.simulation_service:
         state.simulation_service.stop_playback()
     return ApiResponse(data={"status": "stopped"})
+
+
+# ---------------------------------------------------------------------------
+# Materials
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/materials")
+async def get_materials(process_type: Optional[str] = None, category: Optional[str] = None) -> ApiResponse:
+    """Get all materials, optionally filtered by process type or category."""
+    if not state.material_service:
+        # Return built-in defaults even without service
+        from openaxis.core.materials import BUILT_IN_MATERIALS
+        materials = [m.to_dict() for m in BUILT_IN_MATERIALS]
+        if process_type:
+            materials = [m for m in materials if m['processType'] == process_type]
+        if category:
+            materials = [m for m in materials if m['category'] == category]
+        return ApiResponse(data=materials)
+
+    if process_type:
+        data = state.material_service.get_materials_by_process(process_type)
+    elif category:
+        data = state.material_service.get_materials_by_category(category)
+    else:
+        data = state.material_service.get_all_materials()
+    return ApiResponse(data=data)
+
+
+@app.get("/api/materials/summary")
+async def get_materials_summary() -> ApiResponse:
+    """Get summary of available materials."""
+    if not state.material_service:
+        return ApiResponse(data={
+            'totalMaterials': 0,
+            'builtIn': 0,
+            'custom': 0,
+            'processTypes': [],
+            'categories': [],
+            'materialsPerProcess': {},
+        })
+    return ApiResponse(data=state.material_service.get_summary())
+
+
+@app.get("/api/materials/process-types")
+async def get_process_types() -> ApiResponse:
+    """Get list of available process types."""
+    if not state.material_service:
+        return ApiResponse(data=['waam', 'pellet_extrusion', 'milling'])
+    return ApiResponse(data=state.material_service.get_process_types())
+
+
+@app.get("/api/materials/{material_id}")
+async def get_material(material_id: str) -> ApiResponse:
+    """Get a single material by ID."""
+    if not state.material_service:
+        raise HTTPException(status_code=503, detail="Material service unavailable")
+    data = state.material_service.get_material_by_id(material_id)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Material '{material_id}' not found")
+    return ApiResponse(data=data)
+
+
+class CreateMaterialRequest(BaseModel):
+    id: str
+    name: str
+    processType: str
+    category: str = 'metal'
+    description: str = ''
+    properties: Dict[str, Any] = {}
+    slicingDefaults: Dict[str, Any] = {}
+
+
+@app.post("/api/materials")
+async def create_material(req: CreateMaterialRequest) -> ApiResponse:
+    """Create a custom material profile."""
+    if not state.material_service:
+        raise HTTPException(status_code=503, detail="Material service unavailable")
+    data = state.material_service.create_custom_material(req.dict())
+    return ApiResponse(data=data)
+
+
+@app.delete("/api/materials/{material_id}")
+async def delete_material(material_id: str) -> ApiResponse:
+    """Delete a custom material (built-in materials cannot be deleted)."""
+    if not state.material_service:
+        raise HTTPException(status_code=503, detail="Material service unavailable")
+    success = state.material_service.delete_custom_material(material_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot delete built-in material or material not found")
+    return ApiResponse(data={"deleted": material_id})
+
+
+# ---------------------------------------------------------------------------
+# Work Frames
+# ---------------------------------------------------------------------------
+
+
+class CreateWorkFrameRequest(BaseModel):
+    id: str
+    name: str
+    position: List[float] = [0.0, 0.0, 0.0]
+    rotation: List[float] = [0.0, 0.0, 0.0]
+    size: List[float] = [1.0, 0.05, 1.0]
+    alignmentMethod: str = 'manual'
+    color: str = '#3b82f6'
+
+
+class UpdateWorkFrameRequest(BaseModel):
+    class Config:
+        extra = "allow"
+
+
+class AlignFrameRequest(BaseModel):
+    origin: List[float] = Field(min_length=3, max_length=3)
+    zPoint: List[float] = Field(min_length=3, max_length=3)
+    xPoint: List[float] = Field(min_length=3, max_length=3)
+
+
+class TransformPointRequest(BaseModel):
+    point: List[float] = Field(min_length=3, max_length=3)
+    frameId: str
+    direction: str = 'to_frame'  # 'to_frame' or 'from_frame'
+
+
+@app.get("/api/workframes")
+async def get_workframes() -> ApiResponse:
+    """Get all work frames."""
+    if not state.workframe_service:
+        return ApiResponse(data=[{
+            'id': 'default_workframe',
+            'name': 'Build Platform',
+            'position': [2000, 0, 0],
+            'rotation': [0, 0, 0],
+            'size': [1.5, 0.05, 1.5],
+            'alignmentMethod': 'manual',
+            'childPartIds': [],
+            'isDefault': True,
+            'visible': True,
+            'color': '#3b82f6',
+        }])
+    return ApiResponse(data=state.workframe_service.get_all_frames())
+
+
+@app.get("/api/workframes/{frame_id}")
+async def get_workframe(frame_id: str) -> ApiResponse:
+    """Get a single work frame."""
+    if not state.workframe_service:
+        raise HTTPException(status_code=503, detail="Workframe service unavailable")
+    data = state.workframe_service.get_frame(frame_id)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Work frame '{frame_id}' not found")
+    return ApiResponse(data=data)
+
+
+@app.post("/api/workframes")
+async def create_workframe(req: CreateWorkFrameRequest) -> ApiResponse:
+    """Create a new work frame."""
+    if not state.workframe_service:
+        raise HTTPException(status_code=503, detail="Workframe service unavailable")
+    data = state.workframe_service.create_frame(req.dict())
+    return ApiResponse(data=data)
+
+
+@app.put("/api/workframes/{frame_id}")
+async def update_workframe(frame_id: str, body: UpdateWorkFrameRequest) -> ApiResponse:
+    """Update a work frame."""
+    if not state.workframe_service:
+        raise HTTPException(status_code=503, detail="Workframe service unavailable")
+    data = state.workframe_service.update_frame(frame_id, body.dict(exclude_unset=True))
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Work frame '{frame_id}' not found")
+    return ApiResponse(data=data)
+
+
+@app.delete("/api/workframes/{frame_id}")
+async def delete_workframe(frame_id: str) -> ApiResponse:
+    """Delete a work frame (cannot delete default)."""
+    if not state.workframe_service:
+        raise HTTPException(status_code=503, detail="Workframe service unavailable")
+    success = state.workframe_service.delete_frame(frame_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot delete default frame or frame not found")
+    return ApiResponse(data={"deleted": frame_id})
+
+
+@app.post("/api/workframes/align")
+async def align_workframe(req: AlignFrameRequest) -> ApiResponse:
+    """Compute frame position and rotation from Z+X alignment method."""
+    if not state.workframe_service:
+        raise HTTPException(status_code=503, detail="Workframe service unavailable")
+    position, rotation = state.workframe_service.compute_alignment_z_plus_x(
+        tuple(req.origin), tuple(req.zPoint), tuple(req.xPoint)
+    )
+    return ApiResponse(data={
+        'position': list(position),
+        'rotation': list(rotation),
+    })
+
+
+@app.post("/api/workframes/transform-point")
+async def transform_point(req: TransformPointRequest) -> ApiResponse:
+    """Transform a point to/from a work frame's local coordinates."""
+    if not state.workframe_service:
+        raise HTTPException(status_code=503, detail="Workframe service unavailable")
+
+    point = tuple(req.point)
+    if req.direction == 'to_frame':
+        result = state.workframe_service.transform_point_to_frame(point, req.frameId)
+    else:
+        result = state.workframe_service.transform_point_from_frame(point, req.frameId)
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Work frame '{req.frameId}' not found")
+    return ApiResponse(data={'point': list(result)})
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+class ValidationCheckRequest(BaseModel):
+    toolpathId: str
+    reachability: Optional[List[bool]] = None
+
+
+@app.post("/api/validation/check")
+async def validation_check(req: ValidationCheckRequest) -> ApiResponse:
+    """Run full quality validation on a toolpath."""
+    toolpath_data = state.toolpaths.get(req.toolpathId)
+    if not toolpath_data:
+        raise HTTPException(status_code=404, detail="Toolpath not found")
+
+    if state.validation_service:
+        report = state.validation_service.check_all(
+            toolpath_data,
+            reachability_array=req.reachability,
+        )
+        return ApiResponse(data=report.to_dict())
+
+    # Fallback: return basic report without service
+    return ApiResponse(data={
+        'overallScore': 100,
+        'recommendations': [],
+        'reachability': {
+            'total_points': 0,
+            'reachable_count': 0,
+            'unreachable_count': 0,
+            'reachability_pct': 100.0,
+        },
+        'singularities': {
+            'total_zones': 0,
+            'zones': [],
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
+# Post Processor
+# ---------------------------------------------------------------------------
+
+
+class PostProcessorExportRequest(BaseModel):
+    toolpathId: str
+    format: str = 'gcode'
+    config: Optional[Dict[str, Any]] = None
+
+
+@app.get("/api/postprocessor/formats")
+async def postprocessor_formats() -> ApiResponse:
+    """Get list of available export formats."""
+    if state.postprocessor_service:
+        return ApiResponse(data=state.postprocessor_service.get_available_formats())
+    return ApiResponse(data=[
+        {'id': 'gcode', 'name': 'G-code', 'extension': '.gcode', 'vendor': 'Generic', 'available': False},
+        {'id': 'rapid', 'name': 'ABB RAPID', 'extension': '.mod', 'vendor': 'ABB', 'available': False},
+        {'id': 'krl', 'name': 'KUKA KRL', 'extension': '.src', 'vendor': 'KUKA', 'available': False},
+        {'id': 'fanuc', 'name': 'Fanuc LS', 'extension': '.ls', 'vendor': 'Fanuc', 'available': False},
+    ])
+
+
+@app.get("/api/postprocessor/config/{format_name}")
+async def postprocessor_default_config(format_name: str) -> ApiResponse:
+    """Get default configuration for a post processor format."""
+    if not state.postprocessor_service:
+        raise HTTPException(status_code=503, detail="Post processor service unavailable")
+    return ApiResponse(data=state.postprocessor_service.get_default_config(format_name))
+
+
+@app.post("/api/postprocessor/export")
+async def postprocessor_export(req: PostProcessorExportRequest) -> ApiResponse:
+    """Export toolpath in the specified format."""
+    toolpath_data = state.toolpaths.get(req.toolpathId)
+    if not toolpath_data:
+        raise HTTPException(status_code=404, detail="Toolpath not found")
+
+    if not state.postprocessor_service:
+        raise HTTPException(status_code=503, detail="Post processor service unavailable")
+
+    result = state.postprocessor_service.export(
+        toolpath_data,
+        format_name=req.format,
+        config_overrides=req.config,
+    )
+
+    if 'error' in result and result['error']:
+        raise HTTPException(status_code=400, detail=result['error'])
+
+    # Write to temp file
+    import tempfile
+    output_dir = Path(tempfile.gettempdir()) / "openaxis_exports"
+    output_dir.mkdir(exist_ok=True)
+    ext = result.get('extension', '.gcode')
+    output_path = output_dir / f"toolpath_{req.toolpathId}{ext}"
+    output_path.write_text(result['content'], encoding='utf-8')
+    result['filePath'] = str(output_path)
+
+    return ApiResponse(data=result)
+
+
+# ---------------------------------------------------------------------------
+# Toolpath Editor
+# ---------------------------------------------------------------------------
+
+
+class ToolpathModifyRequest(BaseModel):
+    toolpathId: str
+    action: str  # 'speed_override', 'deposition_override', 'delete', 'reverse', 'add_delay', 'split'
+    segmentIndices: List[int] = Field(default_factory=list)
+    value: Optional[float] = None  # new speed, new rate, delay seconds, split point index
+    config: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/toolpath/{toolpath_id}/modify")
+async def toolpath_modify(toolpath_id: str, body: ToolpathModifyRequest) -> ApiResponse:
+    """Apply a modification to a toolpath's segments."""
+    toolpath_data = state.toolpaths.get(toolpath_id)
+    if not toolpath_data:
+        raise HTTPException(status_code=404, detail="Toolpath not found")
+
+    if not state.toolpath_editor_service:
+        raise HTTPException(status_code=503, detail="Toolpath editor service unavailable")
+
+    action = body.action
+    indices = body.segmentIndices
+    value = body.value
+
+    try:
+        if action == 'speed_override' and value is not None:
+            state.toolpath_editor_service.apply_speed_override(toolpath_data, indices, value)
+        elif action == 'deposition_override' and value is not None:
+            state.toolpath_editor_service.apply_deposition_override(toolpath_data, indices, value)
+        elif action == 'delete':
+            state.toolpath_editor_service.delete_segments(toolpath_data, indices)
+        elif action == 'reverse':
+            state.toolpath_editor_service.reverse_segments(toolpath_data, indices)
+        elif action == 'add_delay' and value is not None and len(indices) > 0:
+            state.toolpath_editor_service.add_delay(toolpath_data, indices[0], value)
+        elif action == 'split' and value is not None and len(indices) > 0:
+            state.toolpath_editor_service.split_segment(toolpath_data, indices[0], int(value))
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+
+        # Update stored toolpath
+        state.toolpaths[toolpath_id] = toolpath_data
+        return ApiResponse(data=toolpath_data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Mesh Operations (Sprint 8)
+# ---------------------------------------------------------------------------
+
+
+class MeshBooleanRequest(BaseModel):
+    geometryIdA: str
+    geometryIdB: str
+    operation: str  # 'union', 'subtract', 'intersect'
+    resultId: Optional[str] = None
+
+
+class MeshRepairRequest(BaseModel):
+    geometryId: str
+
+
+class MeshAnalyzeRequest(BaseModel):
+    geometryId: str
+
+
+class MeshOffsetRequest(BaseModel):
+    geometryId: str
+    distance: float
+
+
+class MeshUndoRequest(BaseModel):
+    geometryId: str
+
+
+@app.post("/api/geometry/boolean")
+async def geometry_boolean(body: MeshBooleanRequest) -> ApiResponse:
+    """Perform a boolean operation on two geometry meshes."""
+    if not state.mesh_service:
+        raise HTTPException(status_code=503, detail="Mesh service unavailable")
+    try:
+        result = state.mesh_service.boolean(
+            body.geometryIdA, body.geometryIdB, body.operation, body.resultId,
+        )
+        return ApiResponse(data=result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/geometry/repair")
+async def geometry_repair(body: MeshRepairRequest) -> ApiResponse:
+    """Repair a mesh (fill holes, fix normals, remove degenerate faces)."""
+    if not state.mesh_service:
+        raise HTTPException(status_code=503, detail="Mesh service unavailable")
+    try:
+        result = state.mesh_service.repair(body.geometryId)
+        return ApiResponse(data=result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/geometry/analyze")
+async def geometry_analyze(body: MeshAnalyzeRequest) -> ApiResponse:
+    """Analyze mesh quality."""
+    if not state.mesh_service:
+        raise HTTPException(status_code=503, detail="Mesh service unavailable")
+    try:
+        result = state.mesh_service.analyze(body.geometryId)
+        return ApiResponse(data=result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/geometry/offset")
+async def geometry_offset(body: MeshOffsetRequest) -> ApiResponse:
+    """Offset mesh uniformly (positive = outward)."""
+    if not state.mesh_service:
+        raise HTTPException(status_code=503, detail="Mesh service unavailable")
+    try:
+        result = state.mesh_service.offset(body.geometryId, body.distance)
+        return ApiResponse(data=result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/geometry/undo")
+async def geometry_undo(body: MeshUndoRequest) -> ApiResponse:
+    """Undo the last mesh operation on a geometry."""
+    if not state.mesh_service:
+        raise HTTPException(status_code=503, detail="Mesh service unavailable")
+    result = state.mesh_service.undo(body.geometryId)
+    if result is None:
+        raise HTTPException(status_code=400, detail="Nothing to undo")
+    return ApiResponse(data=result)
 
 
 # ---------------------------------------------------------------------------

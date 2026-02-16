@@ -89,6 +89,12 @@ class ExternalAxesController:
         """
         Compute positioner angles to orient the part.
 
+        .. warning::
+            **NON-FUNCTIONAL STUB** — Always returns ``[0.0]`` for rotary axes.
+            No actual transformation computation is performed. A real
+            implementation would solve for the axis angles that align the
+            workpiece ``target_frame`` with the robot's reachable workspace.
+
         Args:
             target_frame: Desired part orientation
             prefer_rotation: Prefer using rotation over robot reorientation
@@ -96,23 +102,23 @@ class ExternalAxesController:
         Returns:
             List of axis values, or None if not achievable
         """
+        import warnings
+        warnings.warn(
+            "compute_positioner_angles() is a STUB — returns [0.0] always. "
+            "External axis computation is not yet implemented.",
+            stacklevel=2,
+        )
+
         if not self.positioner:
             return None
 
-        # Simple implementation for single-axis turntable
+        # STUB: Single-axis turntable — returns 0 (home position) always.
         if len(self.positioner.axes) == 1:
             axis = self.positioner.axes[0]
-
             if axis.axis_type == ExternalAxisType.ROTARY:
-                # Compute rotation angle to align part with target
-                # This is a simplified version - full implementation would
-                # compute actual transformation
-
-                # For now, return zero (part at home position)
                 return [0.0]
 
-        # For 2-axis positioner, would compute both tilt and rotate
-        # Not implemented yet
+        # 2-axis positioner — NOT IMPLEMENTED
         return None
 
     def is_within_limits(self, axis_values: List[float]) -> bool:
@@ -176,6 +182,13 @@ class ExternalAxesController:
         """
         Optimize external axis position to maximize robot reachability.
 
+        .. warning::
+            **NON-FUNCTIONAL STUB** — Always returns the midpoint of each
+            axis's range. No actual reachability analysis is performed.
+            A real implementation would evaluate IK feasibility across
+            ``target_frames`` for candidate axis positions and choose the
+            configuration that maximises the number of reachable targets.
+
         Args:
             robot_base_frame: Robot base frame
             target_frames: List of target frames the robot needs to reach
@@ -183,10 +196,17 @@ class ExternalAxesController:
         Returns:
             Optimal axis positions, or None if no solution
         """
+        import warnings
+        warnings.warn(
+            "optimize_axis_position() is a STUB — returns midpoint of range. "
+            "No reachability analysis is performed.",
+            stacklevel=2,
+        )
+
         if not self.positioner:
             return None
 
-        # Simplified implementation: use middle of range
+        # STUB: Returns midpoint of each axis range
         optimal_values = []
         for axis in self.positioner.axes:
             mid_value = (axis.min_limit + axis.max_limit) / 2
