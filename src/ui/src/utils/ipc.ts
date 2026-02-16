@@ -2,7 +2,7 @@
  * IPC utilities for communicating between Electron renderer and Python backend
  */
 
-import type { IPCRequest, IPCResponse, APIResponse } from '../types';
+import type { APIResponse } from '../types';
 
 // Check if we're running in Electron
 const isElectron = typeof window !== 'undefined' && window.electron !== undefined;

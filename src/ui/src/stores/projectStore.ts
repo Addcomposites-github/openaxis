@@ -5,6 +5,7 @@ import type { Project, GeometryData, ToolpathData } from '../types';
 interface ProjectState {
   projects: Project[];
   currentProject: Project | null;
+  workspaceToolpath: any | null; // Raw backend ToolpathData for cross-page flow
   isLoading: boolean;
   error: string | null;
 
@@ -14,6 +15,7 @@ interface ProjectState {
   updateProject: (id: string, updates: Partial<Project>) => void;
   deleteProject: (id: string) => void;
   setCurrentProject: (project: Project | null) => void;
+  setWorkspaceToolpath: (data: any | null) => void;
   loadProjects: () => Promise<void>;
   saveProject: (project: Project) => Promise<void>;
   setGeometry: (geometry: GeometryData) => void;
@@ -23,9 +25,10 @@ interface ProjectState {
 }
 
 export const useProjectStore = create<ProjectState>()(
-  immer((set, get) => ({
+  immer((set, _get) => ({
     projects: [],
     currentProject: null,
+    workspaceToolpath: null,
     isLoading: false,
     error: null,
 
@@ -55,6 +58,7 @@ export const useProjectStore = create<ProjectState>()(
         state.projects = state.projects.filter((p) => p.id !== id);
         if (state.currentProject?.id === id) {
           state.currentProject = null;
+          localStorage.removeItem('openaxis-current-project-id');
         }
 
         // Persist to localStorage
@@ -64,6 +68,13 @@ export const useProjectStore = create<ProjectState>()(
     setCurrentProject: (project) =>
       set((state) => {
         state.currentProject = project;
+        // Persist to localStorage so it survives refresh
+        localStorage.setItem('openaxis-current-project-id', project?.id ?? '');
+      }),
+
+    setWorkspaceToolpath: (data) =>
+      set((state) => {
+        state.workspaceToolpath = data;
       }),
 
     loadProjects: async () => {
@@ -79,10 +90,19 @@ export const useProjectStore = create<ProjectState>()(
         if (saved) {
           // Load saved projects
           const savedProjects: Project[] = JSON.parse(saved);
+          // Auto-select persisted project or most recent
+          const savedId = localStorage.getItem('openaxis-current-project-id');
+          const autoSelect = savedProjects.find((p) => p.id === savedId)
+            || savedProjects.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())[0]
+            || null;
           set((state) => {
             state.projects = savedProjects;
+            state.currentProject = autoSelect;
             state.isLoading = false;
           });
+          if (autoSelect) {
+            localStorage.setItem('openaxis-current-project-id', autoSelect.id);
+          }
         } else {
           // First time - load mock data
           const mockProjects: Project[] = [
@@ -144,10 +164,16 @@ export const useProjectStore = create<ProjectState>()(
             },
           ];
 
+          // Auto-select the most recently modified mock project
+          const autoSelect = mockProjects.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())[0] || null;
           set((state) => {
             state.projects = mockProjects;
+            state.currentProject = autoSelect;
             state.isLoading = false;
           });
+          if (autoSelect) {
+            localStorage.setItem('openaxis-current-project-id', autoSelect.id);
+          }
 
           // Save mock data to localStorage for next time
           localStorage.setItem('openaxis-projects', JSON.stringify(mockProjects));

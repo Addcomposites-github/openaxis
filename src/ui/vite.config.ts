@@ -18,9 +18,22 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    fs: {
+      // Allow serving files from the config directory
+      allow: ['..', '../../config'],
+    },
   },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+  },
+  publicDir: 'public', // Serve static assets from public directory
+
+  // Vitest configuration
+  // @ts-ignore — vitest/config types may not be installed
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
 });

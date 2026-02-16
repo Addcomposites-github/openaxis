@@ -1,12 +1,13 @@
-import React from 'react';
+import { useEffect, useRef } from 'react';
+import { useMaterialStore } from '../stores/materialStore';
 
 export interface SlicingParameters {
   layerHeight: number;  // mm
   extrusionWidth: number;  // mm
   wallCount: number;
   infillDensity: number;  // 0-1
-  infillPattern: 'lines' | 'grid' | 'triangles' | 'hexagons';
-  processType: 'waam' | 'pellet_extrusion' | 'milling';
+  infillPattern: 'grid' | 'triangles' | 'triangle_grid' | 'radial' | 'offset' | 'hexgrid' | 'medial' | 'zigzag';
+  processType: 'waam' | 'pellet_extrusion' | 'milling' | 'wire_laser' | 'concrete';
 }
 
 interface SlicingParametersPanelProps {
@@ -18,16 +19,56 @@ export default function SlicingParametersPanel({
   parameters,
   onChange
 }: SlicingParametersPanelProps) {
+  const selectedMaterialId = useMaterialStore((s) => s.selectedMaterialId);
+  const materials = useMaterialStore((s) => s.materials);
+  const prevMaterialRef = useRef<string | null>(null);
+
+  // When selected material changes, apply its defaults
+  useEffect(() => {
+    if (selectedMaterialId && selectedMaterialId !== prevMaterialRef.current) {
+      const material = materials.find((m) => m.id === selectedMaterialId);
+      if (material) {
+        const { slicingDefaults } = material;
+        onChange({
+          layerHeight: slicingDefaults.layerHeight,
+          extrusionWidth: slicingDefaults.extrusionWidth,
+          wallCount: slicingDefaults.wallCount,
+          infillDensity: slicingDefaults.infillDensity,
+          infillPattern: slicingDefaults.infillPattern as SlicingParameters['infillPattern'],
+          processType: material.processType as SlicingParameters['processType'],
+        });
+      }
+      prevMaterialRef.current = selectedMaterialId;
+    }
+  }, [selectedMaterialId, materials, onChange]);
+
   const handleChange = (key: keyof SlicingParameters, value: any) => {
     onChange({ ...parameters, [key]: value });
   };
 
+  // Find currently selected material for badge
+  const selectedMaterial = selectedMaterialId
+    ? materials.find((m) => m.id === selectedMaterialId)
+    : null;
+
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-sm font-semibold text-gray-900 mb-3">
-          Slicing Parameters
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-900">
+            Slicing Parameters
+          </h3>
+          {selectedMaterial && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+              {selectedMaterial.name}
+            </span>
+          )}
+        </div>
+        {selectedMaterial && (
+          <p className="text-xs text-blue-600 mb-2">
+            Parameters auto-filled from material profile. You can override any value below.
+          </p>
+        )}
       </div>
 
       {/* Layer Height */}
@@ -41,7 +82,7 @@ export default function SlicingParametersPanel({
         <input
           type="range"
           min="0.5"
-          max="5"
+          max="20"
           step="0.1"
           value={parameters.layerHeight}
           onChange={(e) => handleChange('layerHeight', parseFloat(e.target.value))}
@@ -49,7 +90,7 @@ export default function SlicingParametersPanel({
         />
         <div className="flex justify-between text-xs text-gray-400 mt-1">
           <span>0.5mm</span>
-          <span>5mm</span>
+          <span>20mm</span>
         </div>
       </div>
 
@@ -57,22 +98,22 @@ export default function SlicingParametersPanel({
       <div>
         <div className="flex items-center justify-between mb-1">
           <label className="text-xs font-medium text-gray-700">
-            Extrusion Width
+            Bead / Extrusion Width
           </label>
           <span className="text-xs text-gray-500">{parameters.extrusionWidth}mm</span>
         </div>
         <input
           type="range"
-          min="2"
-          max="10"
+          min="1"
+          max="40"
           step="0.5"
           value={parameters.extrusionWidth}
           onChange={(e) => handleChange('extrusionWidth', parseFloat(e.target.value))}
           className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
         />
         <div className="flex justify-between text-xs text-gray-400 mt-1">
-          <span>2mm</span>
-          <span>10mm</span>
+          <span>1mm</span>
+          <span>40mm</span>
         </div>
       </div>
 
@@ -132,10 +173,14 @@ export default function SlicingParametersPanel({
           onChange={(e) => handleChange('infillPattern', e.target.value)}
           className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         >
-          <option value="lines">Lines</option>
-          <option value="grid">Grid</option>
-          <option value="triangles">Triangles</option>
-          <option value="hexagons">Hexagons</option>
+          <option value="grid">Grid (0/90 alternating)</option>
+          <option value="triangles">Triangles (60 rotation)</option>
+          <option value="triangle_grid">Triangle Grid (dense)</option>
+          <option value="radial">Radial (concentric circles)</option>
+          <option value="offset">Offset (concentric contours)</option>
+          <option value="hexgrid">Hexagonal Honeycomb</option>
+          <option value="medial">Medial Axis</option>
+          <option value="zigzag">Zigzag (continuous)</option>
         </select>
       </div>
 
@@ -151,6 +196,8 @@ export default function SlicingParametersPanel({
         >
           <option value="waam">WAAM (Wire Arc)</option>
           <option value="pellet_extrusion">Pellet Extrusion</option>
+          <option value="wire_laser">Wire Laser DED</option>
+          <option value="concrete">Concrete Extrusion</option>
           <option value="milling">Milling</option>
         </select>
       </div>

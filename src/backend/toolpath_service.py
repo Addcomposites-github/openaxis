@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
     from openaxis.slicing import PlanarSlicer, Toolpath, InfillPattern
+    from openaxis.slicing.slicer_factory import get_slicer, SLICER_REGISTRY
     from openaxis.core.geometry import GeometryLoader
     SLICING_AVAILABLE = True
 except ImportError as e:
@@ -30,7 +31,8 @@ class ToolpathService:
     def generate_toolpath(
         self,
         geometry_path: str,
-        params: Optional[Dict[str, Any]] = None
+        params: Optional[Dict[str, Any]] = None,
+        part_position: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         """
         Generate toolpath from geometry.
@@ -38,6 +40,8 @@ class ToolpathService:
         Args:
             geometry_path: Path to geometry file
             params: Slicing parameters
+            part_position: [x, y, z] offset in mm (Z-up) — mesh is translated
+                           *before* slicing so waypoints are generated in-place.
 
         Returns:
             Dictionary with toolpath data
@@ -53,30 +57,136 @@ class ToolpathService:
         extrusion_width = params.get('extrusionWidth', 2.5)
         wall_count = params.get('wallCount', 2)
         infill_density = params.get('infillDensity', 0.2)
-        infill_pattern = params.get('infillPattern', 'lines')
+        infill_pattern = params.get('infillPattern', 'grid')
+
+        # Advanced params (Sprint 5)
+        wall_width = params.get('wallWidth', None)
+        print_speed = params.get('printSpeed', 1000.0)
+        travel_speed = params.get('travelSpeed', 5000.0)
+        seam_mode = params.get('seamMode', 'guided')
+        seam_shape = params.get('seamShape', 'straight')
+        seam_angle = params.get('seamAngle', 0.0)
+        lead_in_distance = params.get('leadInDistance', 0.0)
+        lead_in_angle = params.get('leadInAngle', 45.0)
+        lead_out_distance = params.get('leadOutDistance', 0.0)
+        lead_out_angle = params.get('leadOutAngle', 45.0)
+
+        # Sprint 9: Support generation
+        support_enabled = params.get('supportEnabled', False)
+        support_threshold = params.get('supportThreshold', 45.0)
+        support_density = params.get('supportDensity', 0.15)
+
+        # Sprint 7: Strategy selection
+        strategy = params.get('strategy', 'planar')
+        slice_angle = params.get('sliceAngle', 0.0)
 
         try:
             # Load geometry
             mesh = GeometryLoader.load(geometry_path)
 
-            # Create slicer
+            # ── Centre the mesh at origin using trimesh (library-backed) ─────
+            # The frontend centres geometry at import time (centerOnPlate).
+            # We replicate the same logic here: centre XY at origin, lift bottom to Z=0.
+            # The frontend handles positioning via its scene graph — the backend always
+            # slices at origin and does NOT apply part_position.
+            import trimesh as _tm
+            from openaxis.core.geometry import GeometryConverter
+            _tmesh = GeometryConverter.compas_to_trimesh(mesh)
+            bounds = _tmesh.bounds  # [[xmin,ymin,zmin],[xmax,ymax,zmax]]
+            cx = (bounds[0][0] + bounds[1][0]) / 2.0
+            cy = (bounds[0][1] + bounds[1][1]) / 2.0
+            lift_z = -bounds[0][2]
+            _tmesh.apply_translation([-cx, -cy, lift_z])
+            # Convert back to COMPAS mesh
+            mesh = GeometryConverter.trimesh_to_compas(_tmesh)
+
+            # Create slicer via factory (Sprint 7)
             pattern_map = {
                 'lines': InfillPattern.LINES,
                 'grid': InfillPattern.GRID,
                 'triangles': InfillPattern.TRIANGLES,
                 'hexagons': InfillPattern.HEXAGONS,
+                'triangle_grid': InfillPattern.TRIANGLES,
+                'radial': InfillPattern.CONCENTRIC,
+                'offset': InfillPattern.CONCENTRIC,
+                'hexgrid': InfillPattern.HEXAGONS,
+                'medial': InfillPattern.LINES,
+                'zigzag': InfillPattern.ZIGZAG,
             }
 
-            slicer = PlanarSlicer(
-                layer_height=layer_height,
-                extrusion_width=extrusion_width,
-                wall_count=wall_count,
-                infill_density=infill_density,
-                infill_pattern=pattern_map.get(infill_pattern, InfillPattern.LINES),
-            )
+            if strategy == 'planar' or strategy not in SLICER_REGISTRY:
+                # Full-featured planar slicer with all Sprint 5 advanced params
+                slicer = PlanarSlicer(
+                    layer_height=layer_height,
+                    extrusion_width=extrusion_width,
+                    wall_count=wall_count,
+                    infill_density=infill_density,
+                    infill_pattern=pattern_map.get(infill_pattern, InfillPattern.LINES),
+                    support_enabled=support_enabled,
+                    wall_width=wall_width,
+                    print_speed=print_speed,
+                    travel_speed=travel_speed,
+                    seam_mode=seam_mode,
+                    seam_shape=seam_shape,
+                    seam_angle=seam_angle,
+                    lead_in_distance=lead_in_distance,
+                    lead_in_angle=lead_in_angle,
+                    lead_out_distance=lead_out_distance,
+                    lead_out_angle=lead_out_angle,
+                    infill_pattern_name=infill_pattern,
+                )
+            elif strategy == 'angled':
+                slicer = get_slicer(
+                    strategy,
+                    layer_height=layer_height,
+                    extrusion_width=extrusion_width,
+                    slice_angle=slice_angle,
+                    wall_count=wall_count,
+                    infill_density=infill_density,
+                )
+            elif strategy == 'radial':
+                slicer = get_slicer(
+                    strategy,
+                    layer_height=layer_height,
+                    extrusion_width=extrusion_width,
+                )
+            elif strategy == 'curve':
+                slicer = get_slicer(
+                    strategy,
+                    layer_height=layer_height,
+                    extrusion_width=extrusion_width,
+                )
+            elif strategy == 'revolved':
+                slicer = get_slicer(
+                    strategy,
+                    layer_height=layer_height,
+                    extrusion_width=extrusion_width,
+                )
+            else:
+                # Fallback — use factory with basic params
+                slicer = get_slicer(
+                    strategy,
+                    layer_height=layer_height,
+                    extrusion_width=extrusion_width,
+                )
 
             # Generate toolpath
             toolpath = slicer.slice(mesh)
+
+            # Debug: log first segment's first few points
+            if toolpath.segments:
+                seg0 = toolpath.segments[0]
+                pts = [(float(p.x), float(p.y), float(p.z)) for p in seg0.points[:3]]
+                print(f"[TOOLPATH-DEBUG] First segment type={seg0.type}, first 3 points (Z-up mm): {pts}")
+                print(f"[TOOLPATH-DEBUG] Total segments: {len(toolpath.segments)}, layers: {toolpath.total_layers}")
+
+            # Post-process: optimize segment order for smooth printing
+            # (nearest-neighbor reordering + cross-layer continuity)
+            toolpath.optimize_segment_order()
+
+            # Insert explicit travel segments between non-adjacent segments
+            # (creates continuous motion for simulation)
+            toolpath.insert_travel_segments()
 
             # Convert toolpath to JSON-serializable format
             toolpath_data = self._toolpath_to_dict(toolpath, params)
@@ -106,10 +216,11 @@ class ToolpathService:
         for segment in toolpath.segments:
             seg_dict = {
                 'type': segment.type.value if hasattr(segment.type, 'value') else str(segment.type),
-                'layer': segment.layer,
+                'layer': segment.layer_index,
                 'points': [[float(p[0]), float(p[1]), float(p[2])] for p in segment.points],
                 'speed': float(segment.speed) if segment.speed else 1000.0,
-                'extrusionRate': float(segment.extrusion_rate) if segment.extrusion_rate else 1.0,
+                'extrusionRate': float(segment.flow_rate) if segment.flow_rate else 1.0,
+                'direction': getattr(segment, 'direction', 'cw'),
             }
             segments_data.append(seg_dict)
 

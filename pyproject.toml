@@ -54,6 +54,10 @@ dependencies = [
     "click>=8.0",
     "rich>=13.0",
     
+    # Backend server
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
+
     # Async support
     "aiofiles>=23.0",
     "asyncio-mqtt>=0.16",

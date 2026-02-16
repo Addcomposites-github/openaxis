@@ -96,7 +96,7 @@ export default function ProjectManager() {
       setNotification(`Opening ${project.name}...`);
       setTimeout(() => {
         setNotification(null);
-        navigate('/geometry');
+        navigate('/workspace?mode=geometry');
       }, 500);
     }
   };

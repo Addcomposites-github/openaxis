@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   CogIcon,
   ServerIcon,
@@ -6,6 +6,9 @@ import {
   ShieldCheckIcon,
   DocumentTextIcon,
 } from '@heroicons/react/24/outline';
+import { checkHealth } from '../api/client';
+
+const SETTINGS_KEY = 'openaxis-settings';
 
 interface SettingsSection {
   id: string;
@@ -21,24 +24,89 @@ const sections: SettingsSection[] = [
   { id: 'about', name: 'About', icon: DocumentTextIcon },
 ];
 
+interface AppSettings {
+  units: string;
+  language: string;
+  theme: string;
+  autoSave: boolean;
+  backupInterval: number;
+  robotIP: string;
+  robotPort: string;
+  enableNotifications: boolean;
+  notifyOnComplete: boolean;
+  notifyOnError: boolean;
+  soundEnabled: boolean;
+}
+
+const defaultSettings: AppSettings = {
+  units: 'metric',
+  language: 'en',
+  theme: 'light',
+  autoSave: true,
+  backupInterval: 30,
+  robotIP: '192.168.1.100',
+  robotPort: '30001',
+  enableNotifications: true,
+  notifyOnComplete: true,
+  notifyOnError: true,
+  soundEnabled: true,
+};
+
 export default function Settings() {
   const [activeSection, setActiveSection] = useState('general');
-  const [settings, setSettings] = useState({
-    units: 'metric',
-    language: 'en',
-    theme: 'light',
-    autoSave: true,
-    backupInterval: 30,
-    robotIP: '192.168.1.100',
-    robotPort: '30001',
-    enableNotifications: true,
-    notifyOnComplete: true,
-    notifyOnError: true,
-    soundEnabled: true,
-  });
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [notification, setNotification] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'testing'>('disconnected');
+  const [dirty, setDirty] = useState(false);
 
-  const handleSettingChange = (key: string, value: any) => {
+  // Load from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(SETTINGS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setSettings({ ...defaultSettings, ...parsed });
+      }
+    } catch {
+      console.warn('Failed to load settings from localStorage');
+    }
+  }, []);
+
+  const handleSettingChange = (key: keyof AppSettings, value: any) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
+    setDirty(true);
+  };
+
+  const handleSave = () => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      setDirty(false);
+      setNotification('Settings saved!');
+      setTimeout(() => setNotification(null), 2000);
+    } catch {
+      setNotification('Failed to save settings');
+      setTimeout(() => setNotification(null), 3000);
+    }
+  };
+
+  const handleReset = () => {
+    setSettings(defaultSettings);
+    setDirty(true);
+    setNotification('Settings reset to defaults (click Save to persist)');
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  const handleTestConnection = async () => {
+    setConnectionStatus('testing');
+    try {
+      const health = await checkHealth();
+      setConnectionStatus(health.ok ? 'connected' : 'disconnected');
+      setNotification(health.ok ? `Backend connected (v${health.version})` : 'Backend unreachable');
+    } catch {
+      setConnectionStatus('disconnected');
+      setNotification('Connection test failed');
+    }
+    setTimeout(() => setNotification(null), 3000);
   };
 
   const renderGeneralSettings = () => (
@@ -66,9 +134,9 @@ export default function Settings() {
         >
           <option value="en">English</option>
           <option value="de">Deutsch</option>
-          <option value="fr">Français</option>
-          <option value="es">Español</option>
-          <option value="zh">中文</option>
+          <option value="fr">Fran&ccedil;ais</option>
+          <option value="es">Espa&ntilde;ol</option>
+          <option value="zh">Chinese</option>
         </select>
       </div>
 
@@ -154,16 +222,28 @@ export default function Settings() {
       </div>
 
       <div className="border-t border-gray-200 pt-6">
-        <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-          Test Connection
+        <button
+          onClick={handleTestConnection}
+          disabled={connectionStatus === 'testing'}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+        >
+          {connectionStatus === 'testing' ? 'Testing...' : 'Test Connection'}
         </button>
       </div>
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
         <h4 className="text-sm font-semibold text-gray-900 mb-2">Connection Status</h4>
         <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-          <span className="text-sm text-gray-700">Disconnected</span>
+          <div className={`w-3 h-3 rounded-full ${
+            connectionStatus === 'connected' ? 'bg-green-500' :
+            connectionStatus === 'testing' ? 'bg-yellow-500 animate-pulse' :
+            'bg-red-500'
+          }`}></div>
+          <span className="text-sm text-gray-700">
+            {connectionStatus === 'connected' ? 'Connected' :
+             connectionStatus === 'testing' ? 'Testing...' :
+             'Disconnected'}
+          </span>
         </div>
       </div>
 
@@ -362,19 +442,11 @@ export default function Settings() {
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-gray-600">Platform:</span>
-            <span className="font-medium text-gray-900">Windows 11</span>
+            <span className="font-medium text-gray-900">{navigator.platform || 'Unknown'}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-gray-600">Python Version:</span>
-            <span className="font-medium text-gray-900">3.11.9</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Electron Version:</span>
-            <span className="font-medium text-gray-900">28.0.0</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Node Version:</span>
-            <span className="font-medium text-gray-900">20.10.0</span>
+            <span className="text-gray-600">User Agent:</span>
+            <span className="font-medium text-gray-900 text-xs max-w-xs truncate">{navigator.userAgent.split(' ').pop()}</span>
           </div>
         </div>
       </div>
@@ -382,6 +454,14 @@ export default function Settings() {
       <div className="border-t border-gray-200 pt-6">
         <h4 className="text-sm font-semibold text-gray-900 mb-4">Links</h4>
         <div className="space-y-2">
+          <a
+            href="https://github.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block text-sm text-blue-600 hover:text-blue-700 hover:underline"
+          >
+            GitHub Repository
+          </a>
           <a
             href="#"
             className="block text-sm text-blue-600 hover:text-blue-700 hover:underline"
@@ -392,27 +472,9 @@ export default function Settings() {
             href="#"
             className="block text-sm text-blue-600 hover:text-blue-700 hover:underline"
           >
-            GitHub Repository
-          </a>
-          <a
-            href="#"
-            className="block text-sm text-blue-600 hover:text-blue-700 hover:underline"
-          >
-            Report an Issue
-          </a>
-          <a
-            href="#"
-            className="block text-sm text-blue-600 hover:text-blue-700 hover:underline"
-          >
             License (MIT)
           </a>
         </div>
-      </div>
-
-      <div className="border-t border-gray-200 pt-6">
-        <button className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-          Check for Updates
-        </button>
       </div>
     </div>
   );
@@ -470,17 +532,38 @@ export default function Settings() {
           <h2 className="text-2xl font-bold text-gray-900 mb-6">
             {sections.find((s) => s.id === activeSection)?.name}
           </h2>
+
+          {/* Notification */}
+          {notification && (
+            <div className="mb-6 px-4 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg text-sm">
+              {notification}
+            </div>
+          )}
+
           {renderContent()}
 
           {/* Save Button */}
           {activeSection !== 'about' && (
-            <div className="mt-8 pt-6 border-t border-gray-200 flex space-x-4">
-              <button className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+            <div className="mt-8 pt-6 border-t border-gray-200 flex items-center space-x-4">
+              <button
+                onClick={handleSave}
+                className={`px-6 py-2 rounded-lg transition-colors ${
+                  dirty
+                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                    : 'bg-gray-300 text-gray-500 cursor-default'
+                }`}
+              >
                 Save Changes
               </button>
-              <button className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+              <button
+                onClick={handleReset}
+                className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              >
                 Reset to Defaults
               </button>
+              {dirty && (
+                <span className="text-xs text-yellow-600">Unsaved changes</span>
+              )}
             </div>
           )}
         </div>

@@ -59,6 +59,7 @@ class ToolpathSegment:
     flow_rate: float = 1.0
     temperature: float = 0.0
     is_retract: bool = False
+    direction: str = "cw"  # 'cw' or 'ccw' — contour winding direction
     metadata: dict = field(default_factory=dict)
 
     def get_length(self) -> float:
@@ -100,6 +101,7 @@ class ToolpathSegment:
             flow_rate=self.flow_rate,
             temperature=self.temperature,
             is_retract=self.is_retract,
+            direction="ccw" if self.direction == "cw" else "cw",
             metadata=self.metadata.copy(),
         )
 
@@ -186,20 +188,23 @@ class Toolpath:
         """
         Optimize segment order to minimize travel moves.
 
-        Uses a greedy nearest-neighbor approach for each layer.
+        Uses a greedy nearest-neighbor approach with bi-directional traversal.
+        Also carries the end position across layers to minimize layer transitions.
         """
         if not self.segments:
             return
 
         # Group segments by layer
-        layers = {}
+        layers: dict[int, list[ToolpathSegment]] = {}
         for seg in self.segments:
             if seg.layer_index not in layers:
                 layers[seg.layer_index] = []
             layers[seg.layer_index].append(seg)
 
-        # Optimize each layer independently
-        optimized_segments = []
+        # Optimize each layer, carrying end position across layers
+        optimized_segments: list[ToolpathSegment] = []
+        last_end_point: Optional[Point] = None
+
         for layer_idx in sorted(layers.keys()):
             layer_segs = layers[layer_idx]
 
@@ -211,26 +216,123 @@ class Toolpath:
                 optimized_segments.extend(travel_segs)
                 continue
 
-            # Greedy nearest neighbor
-            ordered = [other_segs.pop(0)]
+            # Pick the best first segment: nearest to previous layer's end point
+            if last_end_point is not None:
+                best_first_idx = 0
+                best_first_dist = float("inf")
+                best_first_reversed = False
+                for idx, seg in enumerate(other_segs):
+                    # Check distance to start
+                    start = seg.get_start_point()
+                    d_start = np.sqrt(
+                        (start.x - last_end_point.x) ** 2
+                        + (start.y - last_end_point.y) ** 2
+                        + (start.z - last_end_point.z) ** 2
+                    )
+                    if d_start < best_first_dist:
+                        best_first_dist = d_start
+                        best_first_idx = idx
+                        best_first_reversed = False
+                    # Check distance to end (reversed)
+                    end = seg.get_end_point()
+                    d_end = np.sqrt(
+                        (end.x - last_end_point.x) ** 2
+                        + (end.y - last_end_point.y) ** 2
+                        + (end.z - last_end_point.z) ** 2
+                    )
+                    if d_end < best_first_dist:
+                        best_first_dist = d_end
+                        best_first_idx = idx
+                        best_first_reversed = True
+
+                first_seg = other_segs.pop(best_first_idx)
+                if best_first_reversed:
+                    first_seg = first_seg.reverse()
+                ordered = [first_seg]
+            else:
+                ordered = [other_segs.pop(0)]
+
+            # Greedy nearest neighbor with bi-directional check
             while other_segs:
                 current_end = ordered[-1].get_end_point()
                 nearest_idx = 0
                 min_dist = float("inf")
+                use_reversed = False
 
                 for idx, seg in enumerate(other_segs):
+                    # Check distance to start point (normal direction)
                     start = seg.get_start_point()
                     dx = start.x - current_end.x
                     dy = start.y - current_end.y
                     dz = start.z - current_end.z
-                    dist = np.sqrt(dx**2 + dy**2 + dz**2)
+                    dist_start = np.sqrt(dx**2 + dy**2 + dz**2)
 
-                    if dist < min_dist:
-                        min_dist = dist
+                    if dist_start < min_dist:
+                        min_dist = dist_start
                         nearest_idx = idx
+                        use_reversed = False
 
-                ordered.append(other_segs.pop(nearest_idx))
+                    # Check distance to end point (reversed direction)
+                    end = seg.get_end_point()
+                    dx = end.x - current_end.x
+                    dy = end.y - current_end.y
+                    dz = end.z - current_end.z
+                    dist_end = np.sqrt(dx**2 + dy**2 + dz**2)
+
+                    if dist_end < min_dist:
+                        min_dist = dist_end
+                        nearest_idx = idx
+                        use_reversed = True
+
+                next_seg = other_segs.pop(nearest_idx)
+                if use_reversed:
+                    next_seg = next_seg.reverse()
+                ordered.append(next_seg)
 
             optimized_segments.extend(ordered)
+            last_end_point = ordered[-1].get_end_point()
 
         self.segments = optimized_segments
+
+    def insert_travel_segments(
+        self, travel_speed: float = 100.0, threshold: float = 0.1
+    ) -> None:
+        """
+        Insert travel segments between non-adjacent segments.
+
+        Scans the segment list and wherever two consecutive segments have a gap
+        (end of segment N != start of segment N+1), inserts a TRAVEL segment
+        connecting them. Travel segments have flow_rate=0 (no material deposition).
+
+        Args:
+            travel_speed: Speed for travel moves (mm/s)
+            threshold: Minimum gap distance (mm) to insert a travel segment
+        """
+        if len(self.segments) < 2:
+            return
+
+        new_segments: list[ToolpathSegment] = [self.segments[0]]
+        for i in range(1, len(self.segments)):
+            prev_end = new_segments[-1].get_end_point()
+            curr_start = self.segments[i].get_start_point()
+            dx = curr_start.x - prev_end.x
+            dy = curr_start.y - prev_end.y
+            dz = curr_start.z - prev_end.z
+            dist = np.sqrt(dx**2 + dy**2 + dz**2)
+
+            if dist > threshold:
+                travel = ToolpathSegment(
+                    points=[
+                        Point(prev_end.x, prev_end.y, prev_end.z),
+                        Point(curr_start.x, curr_start.y, curr_start.z),
+                    ],
+                    type=ToolpathType.TRAVEL,
+                    layer_index=self.segments[i].layer_index,
+                    speed=travel_speed,
+                    flow_rate=0.0,
+                )
+                new_segments.append(travel)
+
+            new_segments.append(self.segments[i])
+
+        self.segments = new_segments

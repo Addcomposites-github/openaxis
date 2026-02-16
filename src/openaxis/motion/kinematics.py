@@ -28,6 +28,7 @@ class IKSolver:
         robot: RobotModel,
         group: Optional[str] = None,
         method: str = "SLSQP",
+        tool_frame: str = "tool0",
     ):
         """
         Initialize IK solver.
@@ -36,10 +37,12 @@ class IKSolver:
             robot: Robot model from compas_robots
             group: Planning group name (default: use all joints)
             method: Optimization method ('SLSQP', 'differential_evolution', 'trust-constr')
+            tool_frame: Name of the end-effector link for FK evaluation (default: 'tool0')
         """
         self.robot = robot
         self.group = group
         self.method = method
+        self.tool_frame = tool_frame
 
         # Get joint information
         if group:
@@ -69,6 +72,7 @@ class IKSolver:
         initial_guess: Optional[List[float]] = None,
         max_iterations: int = 100,
         tolerance: float = 1e-4,
+        orientation_weight: float = 0.1,
     ) -> Optional[Configuration]:
         """
         Solve inverse kinematics for a target end-effector frame.
@@ -79,17 +83,13 @@ class IKSolver:
             initial_guess: Initial joint configuration
             max_iterations: Maximum optimization iterations
             tolerance: Position/orientation tolerance
+            orientation_weight: Weight for orientation error (0.0 = position only)
 
         Returns:
             Configuration if solution found, None otherwise
         """
         if link_name is None:
-            # Use last link
-            links = list(self.robot.iter_links())
-            link_name = links[-1].name if links else None
-
-        if link_name is None:
-            raise RobotError("No target link specified and robot has no links")
+            link_name = self.tool_frame
 
         # Initial guess (zeros or provided)
         if initial_guess is None:
@@ -97,10 +97,17 @@ class IKSolver:
         else:
             x0 = np.array(initial_guess[: self.n_joints])
 
+        target_pos = np.array(target_frame.point)
+        if orientation_weight > 0:
+            R_target = np.array(target_frame.to_transformation().matrix)[:3, :3]
+
         # Objective function: distance to target
         def objective(joint_values):
             # Compute forward kinematics
-            config = Configuration.from_revolute_values(joint_values, self.joint_names)
+            # Convert to Python list — scipy passes numpy arrays which COMPAS may not handle
+            config = Configuration.from_revolute_values(
+                [float(v) for v in joint_values], self.joint_names
+            )
 
             try:
                 # Get end-effector frame
@@ -108,19 +115,18 @@ class IKSolver:
 
                 # Compute position error
                 pos_error = np.linalg.norm(
-                    np.array(target_frame.point) - np.array(current_frame.point)
+                    target_pos - np.array(current_frame.point)
                 )
 
-                # Compute orientation error (using rotation matrices)
-                R_target = np.array(target_frame.to_transformation().matrix[:3, :3])
-                R_current = np.array(current_frame.to_transformation().matrix[:3, :3])
-                R_error = R_target.T @ R_current
-                # Rotation error as trace of difference from identity
-                orient_error = np.arccos(np.clip((np.trace(R_error) - 1) / 2, -1, 1))
+                if orientation_weight > 0:
+                    # Compute orientation error (using rotation matrices)
+                    R_current = np.array(current_frame.to_transformation().matrix)[:3, :3]
+                    R_error = R_target.T @ R_current
+                    # Rotation error as trace of difference from identity
+                    orient_error = np.arccos(np.clip((np.trace(R_error) - 1) / 2, -1, 1))
+                    return pos_error + orientation_weight * orient_error
 
-                # Combined error (weighted)
-                error = pos_error + 0.1 * orient_error
-                return error
+                return pos_error
 
             except Exception:
                 # FK failed, return large error
@@ -220,6 +226,7 @@ class JacobianIKSolver:
         robot: RobotModel,
         group: Optional[str] = None,
         damping: float = 0.01,
+        tool_frame: str = "tool0",
     ):
         """
         Initialize Jacobian IK solver.
@@ -228,10 +235,12 @@ class JacobianIKSolver:
             robot: Robot model
             group: Planning group name
             damping: Damping factor for stability (0.01-0.1)
+            tool_frame: Name of the end-effector link for FK evaluation (default: 'tool0')
         """
         self.robot = robot
         self.group = group
         self.damping = damping
+        self.tool_frame = tool_frame
 
         # Get joints
         if group:
@@ -256,7 +265,9 @@ class JacobianIKSolver:
             6xN Jacobian matrix (position + orientation)
         """
         jacobian = np.zeros((6, self.n_joints))
-        delta = 1e-6
+        # Use 1e-4 for numerical stability; 1e-6 is too small and leads
+        # to floating-point noise dominating the finite-difference Jacobian.
+        delta = 1e-4
 
         # Get current end-effector frame
         current_frame = self.robot.forward_kinematics(configuration, link_name=link_name)
@@ -308,8 +319,7 @@ class JacobianIKSolver:
             Configuration if converged, None otherwise
         """
         if link_name is None:
-            links = list(self.robot.iter_links())
-            link_name = links[-1].name if links else None
+            link_name = self.tool_frame
 
         # Initial configuration
         if initial_guess is None:

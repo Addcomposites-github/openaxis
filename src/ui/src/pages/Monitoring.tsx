@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   ChartBarIcon,
   ArrowTrendingUpIcon,
   ArrowTrendingDownIcon,
   ExclamationTriangleIcon,
+  SignalIcon,
+  SignalSlashIcon,
 } from '@heroicons/react/24/outline';
 import {
   LineChart,
@@ -14,9 +16,9 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from 'recharts';
+import { apiClient } from '../api/client';
 
 interface SensorData {
   timestamp: number;
@@ -42,68 +44,100 @@ interface Alert {
 export default function Monitoring() {
   const [sensorData, setSensorData] = useState<SensorData[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
-    cpuUsage: 45,
-    memoryUsage: 62,
-    diskUsage: 38,
-    networkLatency: 12,
+    cpuUsage: 0,
+    memoryUsage: 0,
+    diskUsage: 0,
+    networkLatency: 0,
   });
-  const [alerts, setAlerts] = useState<Alert[]>([
-    {
-      id: '1',
-      level: 'warning',
-      message: 'Temperature approaching upper limit',
-      timestamp: '2 minutes ago',
-    },
-    {
-      id: '2',
-      level: 'info',
-      message: 'Toolpath execution started',
-      timestamp: '15 minutes ago',
-    },
-  ]);
+  const [backendConnected, setBackendConnected] = useState(false);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const alertIdRef = useRef(0);
 
   useEffect(() => {
-    // Generate mock sensor data
-    const generateData = () => {
-      const now = Date.now();
-      const data: SensorData[] = [];
-      for (let i = 0; i < 50; i++) {
-        data.push({
-          timestamp: now - (50 - i) * 1000,
-          temperature: 220 + Math.random() * 10,
-          flowRate: 10 + Math.random() * 2,
-          pressure: 5 + Math.random() * 1,
+    // Initial data seed (empty)
+    setSensorData([]);
+
+    const fetchData = async () => {
+      let sensorOk = false;
+      let systemOk = false;
+
+      // Fetch sensor data from backend
+      try {
+        const sensorRes = await apiClient.get('/api/monitoring/sensors', { timeout: 2000 });
+        if (sensorRes.data?.status === 'success' && sensorRes.data?.data) {
+          const d = sensorRes.data.data;
+          setSensorData((prev) => {
+            const newEntry: SensorData = {
+              timestamp: d.timestamp ? d.timestamp * 1000 : Date.now(),
+              temperature: d.temperature ?? 220,
+              flowRate: d.flowRate ?? 10,
+              pressure: d.pressure ?? 5,
+            };
+            const updated = [...prev, newEntry];
+            // Keep last 60 data points (1 minute at 1s interval)
+            return updated.slice(-60);
+          });
+          sensorOk = true;
+        }
+      } catch {
+        // Offline fallback — generate random data locally
+        setSensorData((prev) => {
+          const newEntry: SensorData = {
+            timestamp: Date.now(),
+            temperature: 220 + Math.random() * 10,
+            flowRate: 10 + Math.random() * 2,
+            pressure: 5 + Math.random() * 1,
+          };
+          const updated = [...prev, newEntry];
+          return updated.slice(-60);
         });
       }
-      return data;
+
+      // Fetch system metrics from backend (uses psutil for real CPU/memory/disk)
+      try {
+        const sysRes = await apiClient.get('/api/monitoring/system', { timeout: 2000 });
+        if (sysRes.data?.status === 'success' && sysRes.data?.data) {
+          setSystemStatus(sysRes.data.data);
+          systemOk = true;
+        }
+      } catch {
+        // Offline fallback
+        setSystemStatus({
+          cpuUsage: 40 + Math.random() * 20,
+          memoryUsage: 55 + Math.random() * 15,
+          diskUsage: 35 + Math.random() * 10,
+          networkLatency: 10 + Math.random() * 5,
+        });
+      }
+
+      setBackendConnected(sensorOk || systemOk);
+
+      // Generate alerts from sensor data
+      setSensorData((prev) => {
+        if (prev.length > 0) {
+          const latest = prev[prev.length - 1];
+          if (latest.temperature > 228) {
+            const id = String(++alertIdRef.current);
+            setAlerts((a) => [
+              { id, level: 'warning', message: `Temperature high: ${latest.temperature.toFixed(1)}°C`, timestamp: 'just now' },
+              ...a.slice(0, 9),
+            ]);
+          }
+        }
+        return prev;
+      });
     };
 
-    setSensorData(generateData());
-
-    // Update data every second
-    const interval = setInterval(() => {
-      setSensorData((prev) => {
-        const newData = [...prev.slice(1)];
-        newData.push({
-          timestamp: Date.now(),
-          temperature: 220 + Math.random() * 10,
-          flowRate: 10 + Math.random() * 2,
-          pressure: 5 + Math.random() * 1,
-        });
-        return newData;
-      });
-
-      // Update system status
-      setSystemStatus({
-        cpuUsage: 40 + Math.random() * 20,
-        memoryUsage: 55 + Math.random() * 15,
-        diskUsage: 35 + Math.random() * 10,
-        networkLatency: 10 + Math.random() * 5,
-      });
-    }, 1000);
+    // Fetch immediately then every second
+    fetchData();
+    const interval = setInterval(fetchData, 1000);
 
     return () => clearInterval(interval);
   }, []);
+
+  const dismissAlert = (id: string) => {
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
+  };
 
   const getAlertColor = (level: Alert['level']) => {
     switch (level) {
@@ -123,6 +157,23 @@ export default function Monitoring() {
 
   return (
     <div className="p-6 space-y-6 h-full overflow-auto">
+      {/* Connection Status */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900">System Monitoring</h2>
+        <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-medium ${
+          backendConnected
+            ? 'bg-green-50 text-green-700 border border-green-200'
+            : 'bg-yellow-50 text-yellow-700 border border-yellow-200'
+        }`}>
+          {backendConnected ? (
+            <SignalIcon className="w-4 h-4" />
+          ) : (
+            <SignalSlashIcon className="w-4 h-4" />
+          )}
+          <span>{backendConnected ? 'Live Data from Backend' : 'Offline — Simulated Data'}</span>
+        </div>
+      </div>
+
       {/* System Status Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -142,10 +193,10 @@ export default function Monitoring() {
           </div>
           <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
             <div
-              className={`h-2 rounded-full ${
+              className={`h-2 rounded-full transition-all ${
                 systemStatus.cpuUsage > 80 ? 'bg-red-500' : 'bg-blue-500'
               }`}
-              style={{ width: `${systemStatus.cpuUsage}%` }}
+              style={{ width: `${Math.min(systemStatus.cpuUsage, 100)}%` }}
             ></div>
           </div>
         </div>
@@ -163,8 +214,8 @@ export default function Monitoring() {
           </div>
           <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
             <div
-              className="bg-purple-500 h-2 rounded-full"
-              style={{ width: `${systemStatus.memoryUsage}%` }}
+              className="bg-purple-500 h-2 rounded-full transition-all"
+              style={{ width: `${Math.min(systemStatus.memoryUsage, 100)}%` }}
             ></div>
           </div>
         </div>
@@ -182,8 +233,8 @@ export default function Monitoring() {
           </div>
           <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
             <div
-              className="bg-green-500 h-2 rounded-full"
-              style={{ width: `${systemStatus.diskUsage}%` }}
+              className="bg-green-500 h-2 rounded-full transition-all"
+              style={{ width: `${Math.min(systemStatus.diskUsage, 100)}%` }}
             ></div>
           </div>
         </div>
@@ -236,6 +287,7 @@ export default function Monitoring() {
                 stroke="#ef4444"
                 strokeWidth={2}
                 dot={false}
+                isAnimationActive={false}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -272,6 +324,7 @@ export default function Monitoring() {
                 stroke="#3b82f6"
                 fill="#93c5fd"
                 strokeWidth={2}
+                isAnimationActive={false}
               />
             </AreaChart>
           </ResponsiveContainer>
@@ -282,55 +335,41 @@ export default function Monitoring() {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-900">System Alerts</h3>
-          <button className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+          <button
+            onClick={() => setAlerts([])}
+            className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+          >
             Clear All
           </button>
         </div>
         <div className="divide-y divide-gray-200">
-          {alerts.map((alert) => (
-            <div key={alert.id} className="px-6 py-4">
-              <div
-                className={`flex items-start space-x-3 p-3 rounded-lg border ${getAlertColor(
-                  alert.level
-                )}`}
-              >
-                <ExclamationTriangleIcon className="w-5 h-5 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-sm font-medium">{alert.message}</p>
-                  <p className="text-xs mt-1 opacity-75">{alert.timestamp}</p>
-                </div>
-                <button className="text-sm font-medium hover:underline">Dismiss</button>
-              </div>
+          {alerts.length === 0 ? (
+            <div className="px-6 py-6 text-center text-gray-400 text-sm">
+              No alerts — system nominal
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Current Job Info */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h3 className="text-sm font-semibold text-gray-900 mb-4">Current Job</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-          <div>
-            <p className="text-xs text-gray-600 mb-1">Job Name</p>
-            <p className="text-sm font-semibold text-gray-900">Large Vessel</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-600 mb-1">Progress</p>
-            <p className="text-sm font-semibold text-gray-900">48%</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-600 mb-1">Elapsed Time</p>
-            <p className="text-sm font-semibold text-gray-900">1h 23m</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-600 mb-1">Remaining</p>
-            <p className="text-sm font-semibold text-gray-900">1h 32m</p>
-          </div>
-        </div>
-        <div className="mt-4">
-          <div className="w-full bg-gray-200 rounded-full h-3">
-            <div className="bg-blue-600 h-3 rounded-full" style={{ width: '48%' }}></div>
-          </div>
+          ) : (
+            alerts.map((alert) => (
+              <div key={alert.id} className="px-6 py-4">
+                <div
+                  className={`flex items-start space-x-3 p-3 rounded-lg border ${getAlertColor(
+                    alert.level
+                  )}`}
+                >
+                  <ExclamationTriangleIcon className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">{alert.message}</p>
+                    <p className="text-xs mt-1 opacity-75">{alert.timestamp}</p>
+                  </div>
+                  <button
+                    onClick={() => dismissAlert(alert.id)}
+                    className="text-sm font-medium hover:underline"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

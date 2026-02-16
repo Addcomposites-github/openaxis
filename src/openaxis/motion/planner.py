@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from compas.geometry import Frame, Point, Vector
 from compas_robots import Configuration, RobotModel
+from scipy.spatial.transform import Rotation, Slerp
 
 from openaxis.core.exceptions import RobotError
 from openaxis.motion.kinematics import IKSolver
@@ -61,6 +62,12 @@ class CartesianPlanner:
         # Number of waypoints
         n_waypoints = max(int(distance / resolution), 2)
 
+        # Build SLERP interpolator for orientation
+        R_start = np.array(start_frame.to_transformation().matrix)[:3, :3]
+        R_goal = np.array(goal_frame.to_transformation().matrix)[:3, :3]
+        key_rotations = Rotation.from_matrix([R_start, R_goal])
+        slerp = Slerp([0.0, 1.0], key_rotations)
+
         # Interpolate frames
         frames = []
         for i in range(n_waypoints + 1):
@@ -69,10 +76,11 @@ class CartesianPlanner:
             # Linear position interpolation
             pos = start_pos + t * (goal_pos - start_pos)
 
-            # Orientation interpolation (SLERP would be better, but linear is simpler)
-            # For now, use start orientation throughout
-            # TODO: Implement proper SLERP
-            frame = Frame(Point(*pos), start_frame.xaxis, start_frame.yaxis)
+            # SLERP orientation interpolation (scipy.spatial.transform)
+            R_interp = slerp(t).as_matrix()
+            xaxis = Vector(*R_interp[:, 0])
+            yaxis = Vector(*R_interp[:, 1])
+            frame = Frame(Point(*pos), xaxis, yaxis)
             frames.append(frame)
 
         # Solve IK for each waypoint
