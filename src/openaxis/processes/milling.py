@@ -244,65 +244,49 @@ class MillingProcess(ProcessPlugin):
         """
         Calculate material removal rate (MRR).
 
-        Returns:
-            MRR in mm³/min
+        Raises:
+            NotImplementedError: Always — requires validated cutting model.
         """
-        # MRR = depth_of_cut * stepover * feed_rate
-        mrr = (
-            self.params.depth_of_cut * self.params.stepover * self.params.feed_rate
+        raise NotImplementedError(
+            "Custom MRR calculation deleted. "
+            "Integrate validated cutting force model from machining handbook "
+            "(e.g., Altintas 'Manufacturing Automation' or Machining Data Handbook)."
         )
-        return mrr
 
     def calculate_cutting_force(self, material_hardness: float = 200.0) -> float:
         """
         Estimate cutting force.
 
-        Args:
-            material_hardness: Material hardness (HB)
+        DELETED: Used unvalidated model (hardness * 3.0 N/mm²).
+        Real specific cutting force (Kc1.1) varies by material, tool geometry,
+        and cutting conditions. Published values should be used from:
+        - Altintas, Y. (2012) "Manufacturing Automation", Chapter 2
+        - Sandvik Coromant Machining Formulas handbook
 
-        Returns:
-            Estimated cutting force in Newtons
+        Raises:
+            NotImplementedError: Always — requires validated cutting force model.
         """
-        # Simplified model: Force proportional to chip cross-section and hardness
-        chip_area = self.params.depth_of_cut * self.params.stepover  # mm²
-        specific_cutting_force = material_hardness * 3.0  # N/mm²
-
-        force = chip_area * specific_cutting_force
-        return force
+        raise NotImplementedError(
+            "Custom cutting force deleted (used unvalidated hardness * 3.0 model). "
+            "Use specific cutting force (Kc1.1) from material databases: "
+            "Altintas 'Manufacturing Automation' Ch.2 or Sandvik Coromant handbook."
+        )
 
     def get_machining_parameters(self, segment_type: ToolpathType) -> dict:
         """
         Get process parameters for a segment type.
 
-        Args:
-            segment_type: Type of toolpath segment
+        DELETED: Used magic multipliers (1.2x RPM for finishing, 0.8x feed)
+        with no empirical basis.
 
-        Returns:
-            Dictionary of machining parameters
+        Raises:
+            NotImplementedError: Always — multipliers need empirical validation.
         """
-        if self.params.strategy == MillingStrategy.ROUGHING:
-            # Roughing: high MRR
-            return {
-                "spindle_rpm": self.params.spindle_speed,
-                "feed_rate": self.params.feed_rate,
-                "depth_of_cut": self.params.depth_of_cut,
-                "stepover": self.params.stepover,
-            }
-        elif self.params.strategy == MillingStrategy.FINISHING:
-            # Finishing: high speed, low DOC
-            return {
-                "spindle_rpm": self.params.spindle_speed * 1.2,
-                "feed_rate": self.params.feed_rate * 0.8,
-                "depth_of_cut": self.params.depth_of_cut * 0.3,
-                "stepover": self.params.stepover * 0.5,
-            }
-        else:  # Adaptive or Contour
-            return {
-                "spindle_rpm": self.params.spindle_speed,
-                "feed_rate": self.params.feed_rate * 0.9,
-                "depth_of_cut": self.params.depth_of_cut * 0.7,
-                "stepover": self.params.stepover * 0.7,
-            }
+        raise NotImplementedError(
+            "Custom machining parameter multipliers deleted (magic 1.2x, 0.8x "
+            "values had no empirical basis). Integrate material-specific "
+            "cutting data from machining handbook or CAM system."
+        )
 
     def requires_tool_change(self) -> bool:
         """
@@ -311,10 +295,7 @@ class MillingProcess(ProcessPlugin):
         Returns:
             True if tool change needed
         """
-        # In a full system, would check:
-        # - Tool wear
-        # - Tool life
-        # - Different operation requirements
+        # In a full system, would check tool wear, tool life, operation requirements
         return False
 
     def calculate_optimal_spindle_speed(
@@ -323,15 +304,16 @@ class MillingProcess(ProcessPlugin):
         """
         Calculate optimal spindle speed for material.
 
-        Args:
-            material: Material being cut
-            surface_speed: Desired surface speed (m/min)
+        DELETED: The formula RPM = Vc * 1000 / (pi * D) is standard
+        (from any machining handbook) BUT the 'material' parameter was
+        ignored — surface_speed was always the caller's input.
+        Without a material-specific surface speed database, this is misleading.
 
-        Returns:
-            Optimal spindle RPM
+        Raises:
+            NotImplementedError: Always — needs material database.
         """
-        # RPM = (Surface Speed * 1000) / (π * Tool Diameter)
-        diameter_m = self.params.tool_diameter / 1000.0
-        rpm = (surface_speed * 1000) / (np.pi * diameter_m)
-
-        return rpm
+        raise NotImplementedError(
+            "Custom spindle speed calculation deleted (ignored material parameter, "
+            "used caller-supplied surface speed directly). Integrate material-specific "
+            "surface speed database from machining handbook."
+        )

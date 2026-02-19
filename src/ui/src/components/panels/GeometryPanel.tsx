@@ -261,7 +261,7 @@ export default function GeometryPanel() {
         return;
       }
 
-      setNotification('Generating toolpath...');
+      setNotification('Generating toolpath (ORNL Slicer 2)...');
       // Convert store position (Y-up mm) to slicer position (Z-up mm).
       // Scene/store: X=left/right, Y=height, Z=depth
       // Slicer:      X=left/right, Y=depth,  Z=height
@@ -314,7 +314,7 @@ export default function GeometryPanel() {
       useProjectStore.getState().setWorkspaceToolpath(toolpathData);
 
       setNotification(
-        `Toolpath generated! ${toolpathData.totalLayers} layers, ${toolpathData.statistics.totalSegments} segments`
+        `Toolpath generated (ORNL Slicer 2)! ${toolpathData.totalLayers} layers, ${toolpathData.statistics.totalSegments} segments`
       );
 
       setTimeout(() => {
@@ -325,9 +325,11 @@ export default function GeometryPanel() {
         }, 1000);
       }, 2000);
     } catch (error: any) {
-      console.error('Error generating toolpath:', error);
-      setNotification(`Error: ${error.message || 'Failed to generate toolpath'}`);
-      setTimeout(() => setNotification(null), 5000);
+      // Extract the actual backend error message from Axios response
+      const backendError = error.response?.data?.error || error.message || 'Failed to generate toolpath';
+      console.error('Toolpath generation error:', backendError, error.response?.data);
+      setNotification(`Error: ${backendError}`);
+      setTimeout(() => setNotification(null), 8000);
     } finally {
       setIsGenerating(false);
     }
@@ -470,7 +472,7 @@ export default function GeometryPanel() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Position (mm)</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Position <span className="text-gray-400 font-normal">(Scene, mm)</span></label>
                     <div className="grid grid-cols-3 gap-2">
                       {(['x', 'y', 'z'] as const).map((axis) => (
                         <div key={axis}>

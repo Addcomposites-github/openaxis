@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type { Project, GeometryData, ToolpathData } from '../types';
+import { apiClient } from '../api/client';
 
 interface ProjectState {
   projects: Project[];
@@ -84,99 +85,41 @@ export const useProjectStore = create<ProjectState>()(
       });
 
       try {
-        // Try to load from localStorage first
-        const saved = localStorage.getItem('openaxis-projects');
+        // Try backend first
+        let projects: Project[] = [];
+        let fromBackend = false;
 
-        if (saved) {
-          // Load saved projects
-          const savedProjects: Project[] = JSON.parse(saved);
-          // Auto-select persisted project or most recent
-          const savedId = localStorage.getItem('openaxis-current-project-id');
-          const autoSelect = savedProjects.find((p) => p.id === savedId)
-            || savedProjects.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())[0]
-            || null;
-          set((state) => {
-            state.projects = savedProjects;
-            state.currentProject = autoSelect;
-            state.isLoading = false;
-          });
-          if (autoSelect) {
-            localStorage.setItem('openaxis-current-project-id', autoSelect.id);
+        try {
+          const res = await apiClient.get('/api/projects');
+          if (res.data?.status === 'success' && Array.isArray(res.data?.data)) {
+            projects = res.data.data;
+            fromBackend = true;
           }
-        } else {
-          // First time - load mock data
-          const mockProjects: Project[] = [
-            {
-              id: '1',
-              name: 'Bracket Assembly',
-              description: 'Steel bracket for automotive application',
-              process: 'waam',
-              createdAt: '2024-01-15T00:00:00.000Z',
-              modifiedAt: '2024-01-20T00:00:00.000Z',
-              status: 'completed',
-              settings: {
-                units: 'metric',
-                robotType: 'ABB IRB 6700',
-                processParameters: {},
-              },
-            },
-            {
-              id: '2',
-              name: 'Large Vessel',
-              description: 'Composite vessel for industrial storage',
-              process: 'pellet_extrusion',
-              createdAt: '2024-01-18T00:00:00.000Z',
-              modifiedAt: '2024-01-21T00:00:00.000Z',
-              status: 'ready',
-              settings: {
-                units: 'metric',
-                robotType: 'KUKA KR 500',
-                processParameters: {},
-              },
-            },
-            {
-              id: '3',
-              name: 'Mold Core',
-              description: 'Precision mold for injection molding',
-              process: 'milling',
-              createdAt: '2024-01-10T00:00:00.000Z',
-              modifiedAt: '2024-01-19T00:00:00.000Z',
-              status: 'completed',
-              settings: {
-                units: 'metric',
-                robotType: 'Fanuc M-20iA',
-                processParameters: {},
-              },
-            },
-            {
-              id: '4',
-              name: 'Prototype Housing',
-              description: 'Concept housing for new product line',
-              process: 'pellet_extrusion',
-              createdAt: '2024-01-22T00:00:00.000Z',
-              modifiedAt: '2024-01-22T00:00:00.000Z',
-              status: 'draft',
-              settings: {
-                units: 'metric',
-                robotType: '',
-                processParameters: {},
-              },
-            },
-          ];
+        } catch {
+          // Backend unavailable — fall back to localStorage
+        }
 
-          // Auto-select the most recently modified mock project
-          const autoSelect = mockProjects.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())[0] || null;
-          set((state) => {
-            state.projects = mockProjects;
-            state.currentProject = autoSelect;
-            state.isLoading = false;
-          });
-          if (autoSelect) {
-            localStorage.setItem('openaxis-current-project-id', autoSelect.id);
+        if (!fromBackend) {
+          const saved = localStorage.getItem('openaxis-projects');
+          if (saved) {
+            projects = JSON.parse(saved);
           }
+          // No mock projects — empty state shows "Create your first project"
+        }
 
-          // Save mock data to localStorage for next time
-          localStorage.setItem('openaxis-projects', JSON.stringify(mockProjects));
+        // Auto-select persisted project or most recent
+        const savedId = localStorage.getItem('openaxis-current-project-id');
+        const autoSelect = projects.find((p) => p.id === savedId)
+          || projects.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())[0]
+          || null;
+
+        set((state) => {
+          state.projects = projects;
+          state.currentProject = autoSelect;
+          state.isLoading = false;
+        });
+        if (autoSelect) {
+          localStorage.setItem('openaxis-current-project-id', autoSelect.id);
         }
       } catch (error) {
         set((state) => {
@@ -193,8 +136,12 @@ export const useProjectStore = create<ProjectState>()(
       });
 
       try {
-        // TODO: Save to Python backend via IPC
-        // await window.electron.invoke('save-project', project);
+        // Try to save to backend
+        try {
+          await apiClient.post('/api/projects', project);
+        } catch {
+          // Backend unavailable — save locally only
+        }
 
         set((state) => {
           const index = state.projects.findIndex((p) => p.id === project.id);
@@ -205,7 +152,7 @@ export const useProjectStore = create<ProjectState>()(
           }
           state.isLoading = false;
 
-          // Persist to localStorage
+          // Always persist to localStorage as cache
           localStorage.setItem('openaxis-projects', JSON.stringify(state.projects));
         });
       } catch (error) {

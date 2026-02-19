@@ -221,45 +221,32 @@ class PelletExtrusionProcess(ProcessPlugin):
         """
         Calculate extrusion amount for a given distance.
 
-        Args:
-            distance: Movement distance (mm)
-            width: Extrusion width (mm)
+        DELETED: Assumed rectangular cross-section (width * layer_height).
+        Real bead cross-section is elliptical/trapezoidal and depends on
+        nozzle geometry, material rheology, and print speed.
 
-        Returns:
-            Extrusion amount in mm³
+        Raises:
+            NotImplementedError: Always — requires validated bead model.
         """
-        # Volume = cross-sectional area * length
-        # Assuming roughly rectangular cross-section
-        area = width * self.params.layer_height
-        volume = area * distance
-
-        return volume
+        raise NotImplementedError(
+            "Custom extrusion calculation deleted (assumed rectangular cross-section). "
+            "Integrate validated bead profile model from AM research. "
+            "Real bead shape depends on nozzle geometry, material rheology, "
+            "and process parameters."
+        )
 
     def get_print_parameters(self, segment_type: ToolpathType) -> dict:
         """
         Get process parameters for a segment type.
 
-        Args:
-            segment_type: Type of toolpath segment
+        DELETED: Used magic multipliers (0.8x speed for perimeters, 1.2x for infill)
+        with no empirical basis.
 
-        Returns:
-            Dictionary of process parameters
+        Raises:
+            NotImplementedError: Always — multipliers need empirical validation.
         """
-        if segment_type == ToolpathType.PERIMETER:
-            return {
-                "speed": self.params.print_speed * 0.8,  # Slower for perimeters
-                "extrusion_rate": self.params.extrusion_rate,
-                "cooling": self.params.cooling_fan_speed,
-            }
-        elif segment_type == ToolpathType.INFILL:
-            return {
-                "speed": self.params.print_speed * 1.2,  # Faster for infill
-                "extrusion_rate": self.params.extrusion_rate * 1.1,
-                "cooling": self.params.cooling_fan_speed * 0.8,
-            }
-        else:  # Travel
-            return {
-                "speed": self.params.travel_speed,
-                "extrusion_rate": 0.0,
-                "cooling": self.params.cooling_fan_speed,
-            }
+        raise NotImplementedError(
+            "Custom print parameter multipliers deleted (magic 0.8x, 1.2x values "
+            "had no empirical basis). Integrate material-specific parameter "
+            "database or slicer-generated parameters."
+        )

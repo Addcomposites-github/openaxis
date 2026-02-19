@@ -7,6 +7,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { apiClient } from '../api/client';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -278,17 +279,14 @@ export const useMaterialStore = create<MaterialState>()(
 
         set({ isLoading: true });
         try {
-          const response = await fetch('http://localhost:8000/api/materials');
-          if (response.ok) {
-            const json = await response.json();
-            if (json.status === 'success' && Array.isArray(json.data)) {
-              set({
-                materials: json.data as MaterialProfile[],
-                isLoaded: true,
-                isLoading: false,
-              });
-              return;
-            }
+          const response = await apiClient.get('/api/materials');
+          if (response.data.status === 'success' && Array.isArray(response.data.data)) {
+            set({
+              materials: response.data.data as MaterialProfile[],
+              isLoaded: true,
+              isLoading: false,
+            });
+            return;
           }
         } catch (e) {
           console.warn('[MaterialStore] Backend unavailable, using built-in materials');

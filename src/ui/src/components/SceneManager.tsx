@@ -459,6 +459,8 @@ export default function SceneManager() {
   const trajectory = useWorkspaceStore((s) => s.trajectory);
   const simMode = useWorkspaceStore((s) => s.simMode);
   const reachability = useWorkspaceStore((s) => s.reachability);
+  const homeJoints = useWorkspaceStore((s) => s.homeJoints);
+  const homeTransitTime = useWorkspaceStore((s) => s.homeTransitTime);
   const toolpathColorMode = useWorkspaceStore((s) => s.toolpathColorMode);
   const toolpathColorRange = useWorkspaceStore((s) => s.toolpathColorRange);
   const toolpathPartId = useWorkspaceStore((s) => s.toolpathPartId);
@@ -505,43 +507,100 @@ export default function SceneManager() {
       return jointAngles;
     }
 
-    const waypoints = trajectory.waypoints;
-    if (waypoints.length === 0 || jointTrajectory.length < 2) return jointAngles;
+    const wpList = trajectory.waypoints;
+    if (wpList.length === 0 || jointTrajectory.length < 2) return jointAngles;
 
     const t = simState.currentTime;
-    let idx = 0;
-    for (let i = 1; i < waypoints.length; i++) {
-      if (waypoints[i].time >= t) {
-        idx = i - 1;
-        break;
+    const jointNames = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6'];
+
+    // Helper: interpolate between two joint arrays
+    const interpolateJoints = (a: number[], b: number[], frac: number): Record<string, number> => {
+      const res: Record<string, number> = {};
+      for (let j = 0; j < jointNames.length; j++) {
+        const pv = a[j] ?? 0;
+        const nv = b[j] ?? 0;
+        res[jointNames[j]] = pv + (nv - pv) * frac;
       }
+      return res;
+    };
+
+    // If home position padding exists, jointTrajectory = [home, ...toolpathJoints, home]
+    // Timeline: [0, homeTransitTime] = home→first | [homeTransitTime, totalTime-homeTransitTime] = toolpath | [totalTime-homeTransitTime, totalTime] = last→home
+    const hasHomePad = homeJoints && jointTrajectory.length === wpList.length + 2;
+    const htt = hasHomePad ? homeTransitTime : 0;
+
+    if (hasHomePad) {
+      const totalTime = simState.totalTime;
+
+      // Phase 1: Home → first waypoint
+      if (t < htt) {
+        const frac = htt > 0 ? Math.max(0, Math.min(1, t / htt)) : 1;
+        return interpolateJoints(jointTrajectory[0], jointTrajectory[1], frac);
+      }
+
+      // Phase 3: Last waypoint → home
+      if (t > totalTime - htt) {
+        const lastIKIdx = jointTrajectory.length - 2;
+        const homeIdx = jointTrajectory.length - 1;
+        const elapsed = t - (totalTime - htt);
+        const frac = htt > 0 ? Math.max(0, Math.min(1, elapsed / htt)) : 1;
+        return interpolateJoints(jointTrajectory[lastIKIdx], jointTrajectory[homeIdx], frac);
+      }
+
+      // Phase 2: Toolpath playback — adjust time and use offset indices
+      const adjT = t - htt;
+      let idx = 0;
+      for (let i = 1; i < wpList.length; i++) {
+        if (wpList[i].time >= adjT) { idx = i - 1; break; }
+        idx = i;
+      }
+      const nextIdx = Math.min(idx + 1, wpList.length - 1);
+      const dt = wpList[nextIdx].time - wpList[idx].time;
+      const frac = dt > 0 ? Math.max(0, Math.min(1, (adjT - wpList[idx].time) / dt)) : 0;
+
+      // +1 offset because jointTrajectory[0] is home
+      const result = interpolateJoints(jointTrajectory[idx + 1], jointTrajectory[nextIdx + 1], frac);
+
+      // Defensive guard
+      const allZero = jointNames.every(n => Math.abs(result[n]) < 0.001);
+      if (allZero && reachability && !reachability.some(Boolean)) return jointAngles;
+
+      return result;
+    }
+
+    // No home padding — original behavior
+    let idx = 0;
+    for (let i = 1; i < wpList.length; i++) {
+      if (wpList[i].time >= t) { idx = i - 1; break; }
       idx = i;
     }
+    const nextIdx = Math.min(idx + 1, wpList.length - 1);
+    const dt = wpList[nextIdx].time - wpList[idx].time;
+    const frac = dt > 0 ? Math.max(0, Math.min(1, (t - wpList[idx].time) / dt)) : 0;
 
-    const nextIdx = Math.min(idx + 1, waypoints.length - 1);
-    const prev = waypoints[idx];
-    const next = waypoints[nextIdx];
-    const dt = next.time - prev.time;
-    const frac = dt > 0 ? Math.max(0, Math.min(1, (t - prev.time) / dt)) : 0;
+    const result = interpolateJoints(
+      jointTrajectory[Math.min(idx, jointTrajectory.length - 1)] || [],
+      jointTrajectory[Math.min(nextIdx, jointTrajectory.length - 1)] || [],
+      frac,
+    );
 
-    const prevJoints = jointTrajectory[Math.min(idx, jointTrajectory.length - 1)] || [];
-    const nextJoints = jointTrajectory[Math.min(nextIdx, jointTrajectory.length - 1)] || [];
+    // Defensive guard
+    const allZero = jointNames.every(n => Math.abs(result[n]) < 0.001);
+    if (allZero && reachability && !reachability.some(Boolean)) return jointAngles;
 
-    const jointNames = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6'];
-    const result: Record<string, number> = {};
-    for (let j = 0; j < jointNames.length; j++) {
-      const pv = prevJoints[j] ?? 0;
-      const nv = nextJoints[j] ?? 0;
-      result[jointNames[j]] = pv + (nv - pv) * frac;
-    }
     return result;
-  }, [mode, simMode, jointTrajectory, trajectory, simState.currentTime, jointAngles]);
+  }, [mode, simMode, jointTrajectory, trajectory, simState.currentTime, jointAngles, reachability, homeJoints, homeTransitTime]);
 
   // ── Simulation waypoints ────────────────────────────────────────────────
 
   const waypoints = trajectory?.waypoints || [];
-  const currentWp = mode === 'simulation' && simMode === 'toolpath'
-    ? waypointAtTime(waypoints, simState.currentTime)
+  // Adjust time for home transit padding: during home→first and last→home, no toolpath point
+  const hasHomePad = homeJoints && jointTrajectory && trajectory && jointTrajectory.length === waypoints.length + 2;
+  const htt = hasHomePad ? homeTransitTime : 0;
+  const adjustedTime = simState.currentTime - htt;
+  const inToolpathPhase = !hasHomePad || (simState.currentTime >= htt && simState.currentTime <= simState.totalTime - htt);
+  const currentWp = mode === 'simulation' && simMode === 'toolpath' && inToolpathPhase
+    ? waypointAtTime(waypoints, adjustedTime)
     : null;
   const tcpPos: [number, number, number] | null = currentWp
     ? toolpathPointToScene(currentWp.position as [number, number, number])
@@ -552,7 +611,7 @@ export default function SceneManager() {
   const robotJointAngles = mode === 'simulation'
     ? activeJointAngles
     : mode === 'setup'
-      ? { joint_1: 0, joint_2: -0.5, joint_3: 1.57, joint_4: 0, joint_5: 0.5, joint_6: 0 }
+      ? jointAngles  // Use store joint angles (editable via joint jog sliders)
       : {}; // geometry/toolpath mode: default pose
 
   // ── Geometry visibility by mode ─────────────────────────────────────────

@@ -13,14 +13,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/visual/base_link.stl" />
+        <mesh filename="../meshes/irb6700/visual/base_link.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/collision/base_link.stl" />
+        <mesh filename="../meshes/irb6700/collision/base_link.stl" />
       </geometry>
     </collision>
   </link>
@@ -29,14 +29,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/visual/link_1.stl" />
+        <mesh filename="../meshes/irb6700/visual/link_1.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/collision/link_1.stl" />
+        <mesh filename="../meshes/irb6700/collision/link_1.stl" />
       </geometry>
     </collision>
   </link>
@@ -45,14 +45,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/visual/cylinder.stl" />
+        <mesh filename="../meshes/irb6700/visual/cylinder.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/collision/cylinder.stl" />
+        <mesh filename="../meshes/irb6700/collision/cylinder.stl" />
       </geometry>
     </collision>
   </link>
@@ -61,14 +61,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/visual/piston.stl" />
+        <mesh filename="../meshes/irb6700/visual/piston.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/collision/piston.stl" />
+        <mesh filename="../meshes/irb6700/collision/piston.stl" />
       </geometry>
     </collision>
   </link>
@@ -77,14 +77,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700_200_260/visual/link_2.stl" />
+        <mesh filename="../meshes/irb6700_200_260/visual/link_2.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700_200_260/collision/link_2.stl" />
+        <mesh filename="../meshes/irb6700_200_260/collision/link_2.stl" />
       </geometry>
     </collision>
   </link>
@@ -93,14 +93,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700_200_260/visual/link_3.stl" />
+        <mesh filename="../meshes/irb6700_200_260/visual/link_3.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700_200_260/collision/link_3.stl" />
+        <mesh filename="../meshes/irb6700_200_260/collision/link_3.stl" />
       </geometry>
     </collision>
   </link>
@@ -109,14 +109,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700_200_260/visual/link_4.stl" />
+        <mesh filename="../meshes/irb6700_200_260/visual/link_4.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700_200_260/collision/link_4.stl" />
+        <mesh filename="../meshes/irb6700_200_260/collision/link_4.stl" />
       </geometry>
     </collision>
   </link>
@@ -125,14 +125,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/visual/link_5.stl" />
+        <mesh filename="../meshes/irb6700/visual/link_5.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/collision/link_5.stl" />
+        <mesh filename="../meshes/irb6700/collision/link_5.stl" />
       </geometry>
     </collision>
   </link>
@@ -141,14 +141,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/visual/link_6.stl" />
+        <mesh filename="../meshes/irb6700/visual/link_6.stl" />
       </geometry>
       <material name="abb_white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/irb6700/collision/link_6.stl" />
+        <mesh filename="../meshes/irb6700/collision/link_6.stl" />
       </geometry>
     </collision>
   </link>

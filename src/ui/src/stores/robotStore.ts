@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { persist } from 'zustand/middleware';
 import type { RobotConfiguration, RobotState } from '../types';
+import { connectRobot as apiConnect, disconnectRobot as apiDisconnect, homeRobot as apiHome } from '../api/robot';
 
 interface RobotStoreState {
   configuration: RobotConfiguration | null;
@@ -61,14 +62,10 @@ export const useRobotStore = create<RobotStoreState>()(
       });
 
       try {
-        // TODO: Connect via Python backend
-        // await window.electron.invoke('robot-connect', { ipAddress, port });
-
-        // Simulate connection
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-
+        // Connect via backend API (POST /api/robot/connect)
+        const result = await apiConnect();
         set((state) => {
-          state.state.connected = true;
+          state.state.connected = result.connected ?? true;
           state.isConnecting = false;
         });
       } catch (error) {
@@ -82,9 +79,8 @@ export const useRobotStore = create<RobotStoreState>()(
 
     disconnect: async () => {
       try {
-        // TODO: Disconnect via Python backend
-        // await window.electron.invoke('robot-disconnect');
-
+        // Disconnect via backend API (POST /api/robot/disconnect)
+        await apiDisconnect();
         set((state) => {
           state.state.connected = false;
           state.state.enabled = false;
@@ -104,18 +100,15 @@ export const useRobotStore = create<RobotStoreState>()(
       }
 
       try {
-        // TODO: Home via Python backend
-        // await window.electron.invoke('robot-home');
-
         set((state) => {
           state.state.moving = true;
         });
 
-        // Simulate homing
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Home via backend API (POST /api/robot/home)
+        const result = await apiHome();
 
         set((state) => {
-          state.state.jointPositions = [0, 0, 0, 0, 0, 0];
+          state.state.jointPositions = result.joint_positions ?? [0, 0, 0, 0, 0, 0];
           state.state.moving = false;
         });
       } catch (error) {
@@ -128,9 +121,7 @@ export const useRobotStore = create<RobotStoreState>()(
 
     enable: async () => {
       try {
-        // TODO: Enable via Python backend
-        // await window.electron.invoke('robot-enable');
-
+        // Enable — no backend endpoint yet (Robot Raconteur Phase 4)
         set((state) => {
           state.state.enabled = true;
         });
@@ -143,9 +134,7 @@ export const useRobotStore = create<RobotStoreState>()(
 
     disable: async () => {
       try {
-        // TODO: Disable via Python backend
-        // await window.electron.invoke('robot-disable');
-
+        // Disable — no backend endpoint yet (Robot Raconteur Phase 4)
         set((state) => {
           state.state.enabled = false;
         });
@@ -163,14 +152,12 @@ export const useRobotStore = create<RobotStoreState>()(
       }
 
       try {
-        // TODO: Move via Python backend
-        // await window.electron.invoke('robot-move-to', position);
-
+        // MoveTo — no backend endpoint yet (Robot Raconteur Phase 4)
         set((state) => {
           state.state.moving = true;
         });
 
-        // Simulate movement
+        // Simulate movement (real motion requires Robot Raconteur hardware driver)
         await new Promise((resolve) => setTimeout(resolve, 1500));
 
         set((state) => {

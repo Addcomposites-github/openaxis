@@ -101,6 +101,13 @@ except ImportError:
     MeshService = None
     MESH_SERVICE_AVAILABLE = False
 
+try:
+    from openaxis.core.config import ConfigManager
+    CONFIG_MANAGER_AVAILABLE = True
+except ImportError:
+    ConfigManager = None
+    CONFIG_MANAGER_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -130,6 +137,7 @@ class HealthResponse(BaseModel):
 
 class FKRequest(BaseModel):
     jointValues: List[float] = Field(default_factory=lambda: [0.0] * 6, min_length=1, max_length=12)
+    tcpOffset: Optional[List[float]] = None  # [x, y, z] meters — tool center point offset from flange
 
 
 class IKRequest(BaseModel):
@@ -235,6 +243,11 @@ class AppState:
         self.postprocessor_service = PostProcessorService() if POSTPROCESSOR_SERVICE_AVAILABLE else None
         self.toolpath_editor_service = ToolpathEditorService() if TOOLPATH_EDITOR_SERVICE_AVAILABLE else None
         self.mesh_service = MeshService() if MESH_SERVICE_AVAILABLE else None
+        self.config_manager = (
+            ConfigManager(config_dir=str(CONFIG_DIR))
+            if CONFIG_MANAGER_AVAILABLE and CONFIG_DIR.exists()
+            else None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +424,7 @@ async def robot_load(body: RobotLoadRequest) -> ApiResponse:
 @app.post("/api/robot/fk")
 async def robot_fk(body: FKRequest) -> ApiResponse:
     if state.robot_service:
-        data = state.robot_service.forward_kinematics(body.jointValues)
+        data = state.robot_service.forward_kinematics(body.jointValues, tcp_offset=body.tcpOffset)
     else:
         import math
         j1 = body.jointValues[0] if body.jointValues else 0
@@ -472,6 +485,34 @@ async def robot_home() -> ApiResponse:
         raise HTTPException(status_code=400, detail="Robot not connected")
     state.robot_state["joint_positions"] = [0.0] * 6
     return ApiResponse(data=state.robot_state)
+
+
+# ---------------------------------------------------------------------------
+# Tool Library
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tools")
+async def list_tools() -> ApiResponse:
+    """List available tool configurations from config/tools/*.yaml."""
+    if state.config_manager:
+        try:
+            tool_names = state.config_manager.list_tools()
+            tool_data = []
+            for name in tool_names:
+                t = state.config_manager.get_tool(name)
+                tool_data.append({
+                    "id": name,
+                    "name": t.name,
+                    "type": t.type,
+                    "tcpOffset": t.tcp_offset,
+                    "mass": t.mass,
+                    "description": t.description,
+                    "properties": t.properties,
+                })
+            return ApiResponse(data=tool_data)
+        except Exception as e:
+            logger.warning(f"Failed to load tools: {e}")
+    return ApiResponse(data=[])
 
 
 # ---------------------------------------------------------------------------
@@ -555,10 +596,15 @@ async def get_toolpath(toolpath_id: str) -> ApiResponse:
 async def toolpath_generate(body: ToolpathGenerateRequest) -> ApiResponse:
     if state.toolpath_service and body.geometryPath:
         try:
-            toolpath_data = state.toolpath_service.generate_toolpath(
+            # Run the synchronous slicer (ORNL Slicer 2 subprocess) in a
+            # thread pool so it doesn't block the async event loop.
+            import asyncio
+
+            toolpath_data = await asyncio.to_thread(
+                state.toolpath_service.generate_toolpath,
                 body.geometryPath,
                 body.params,
-                part_position=body.partPosition,
+                body.partPosition,
             )
             state.toolpaths[toolpath_data["id"]] = toolpath_data
             return ApiResponse(data=toolpath_data)

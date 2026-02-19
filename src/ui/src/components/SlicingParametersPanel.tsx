@@ -7,7 +7,7 @@ export interface SlicingParameters {
   wallCount: number;
   infillDensity: number;  // 0-1
   infillPattern: 'grid' | 'triangles' | 'triangle_grid' | 'radial' | 'offset' | 'hexgrid' | 'medial' | 'zigzag';
-  processType: 'waam' | 'pellet_extrusion' | 'milling' | 'wire_laser' | 'concrete';
+  processType: 'waam' | 'pellet_extrusion' | 'milling';
 }
 
 interface SlicingParametersPanelProps {
@@ -184,22 +184,20 @@ export default function SlicingParametersPanel({
         </select>
       </div>
 
-      {/* Process Type */}
+      {/* Process Type (read-only — set in Setup > Process tab) */}
       <div>
         <label className="block text-xs font-medium text-gray-700 mb-1">
           Process Type
         </label>
-        <select
-          value={parameters.processType}
-          onChange={(e) => handleChange('processType', e.target.value)}
-          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        >
-          <option value="waam">WAAM (Wire Arc)</option>
-          <option value="pellet_extrusion">Pellet Extrusion</option>
-          <option value="wire_laser">Wire Laser DED</option>
-          <option value="concrete">Concrete Extrusion</option>
-          <option value="milling">Milling</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-800 border border-gray-200">
+            {parameters.processType === 'waam' ? 'WAAM (Wire Arc)' :
+             parameters.processType === 'pellet_extrusion' ? 'Pellet Extrusion' :
+             parameters.processType === 'milling' ? 'Milling' :
+             parameters.processType}
+          </span>
+          <span className="text-xs text-gray-400">Set in Setup → Process</span>
+        </div>
       </div>
 
       {/* Summary */}

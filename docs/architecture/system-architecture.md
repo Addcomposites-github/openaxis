@@ -119,75 +119,77 @@ src/core/
 
 ### 2. Slicing Module (`src/slicing/`)
 
-Toolpath generation for various manufacturing processes.
+Toolpath generation. **Backend: compas_slicer** (ETH Zurich).
 
 ```python
 src/slicing/
 ├── __init__.py
-├── base.py            # Abstract Slicer base class
-├── ornl_slicer.py     # ORNL Slicer 2 wrapper
-├── compas_slicer.py   # compas_slicer integration
-├── toolpath.py        # Toolpath data structures
-├── infill/
-│   ├── contour.py     # Contour/perimeter generation
-│   ├── zigzag.py      # Linear infill
-│   └── adaptive.py    # Adaptive infill strategies
-└── strategies/
-    ├── planar.py      # 2.5D planar slicing
-    ├── nonplanar.py   # Curved layer slicing
-    └── multiaxis.py   # Full multi-axis strategies
+├── planar_slicer.py       # Delegates to compas_slicer PlanarSlicer
+├── angled_slicer.py       # NotImplementedError — pending integration
+├── radial_slicer.py       # NotImplementedError — pending integration
+├── curve_slicer.py        # NotImplementedError — pending integration
+├── revolved_slicer.py     # NotImplementedError — pending integration
+├── slicer_factory.py      # Factory dispatcher
+├── toolpath.py            # Data structures (no custom math)
+├── gcode.py               # Vendor-specific G-code generation
+├── infill_patterns.py     # NotImplementedError
+├── contour_offset.py      # NotImplementedError
+├── seam_control.py        # NotImplementedError
+├── engage_disengage.py    # NotImplementedError
+└── support_generation.py  # NotImplementedError
 ```
 
 **Key Classes:**
-- `Slicer`: Abstract base for all slicing implementations
-- `ORNLSlicerWrapper`: Python interface to ORNL Slicer 2
-- `Toolpath`: Sequence of `ToolpathSegment` objects
-- `SlicingStrategy`: Configurable slicing approach
+- `PlanarSlicer`: Delegates to `compas_slicer.slicers.PlanarSlicer`
+- `Toolpath`: Data structures only (no custom algorithms)
+- Other slicers: Stubs raising NotImplementedError
+
+**NOTE:** ORNL Slicer 2 is a C++ desktop app (not pip-installable).
+compas_slicer is the Python-native COMPAS ecosystem alternative.
+ORNL Slicer 2 integration planned for Phase 2 as subprocess wrapper.
 
 ### 3. Motion Module (`src/motion/`)
 
 Robot kinematics and motion planning.
+**Pending: compas_fab PyBullet backend** for IK.
 
 ```python
 src/motion/
 ├── __init__.py
-├── robot.py           # Robot model representation
-├── kinematics.py      # FK/IK solvers
-├── planner.py         # Motion planning interface
-├── trajectory.py      # Trajectory representation
-├── moveit_bridge.py   # MoveIt2 integration via ROS2
-└── external_axes/
-    ├── positioner.py  # 2-axis positioner
-    ├── track.py       # Linear track
-    └── turntable.py   # Rotary table
+├── kinematics.py      # IK stubs — raises NotImplementedError (pending compas_fab)
+├── planner.py         # CartesianPlanner/JointPlanner (depend on IK), TrajectoryOptimizer deleted
+├── collision.py       # PyBullet collision checking
+├── external_axes.py   # Data structures + NotImplementedError stubs
 ```
 
 **Key Classes:**
-- `Robot`: Robot model with joints, links, tool
-- `MotionPlanner`: Abstract planner interface
-- `MoveItPlanner`: MoveIt2 implementation
-- `Trajectory`: Time-parameterized joint trajectory
+- `IKSolver`: Stub — pending compas_fab AnalyticalInverseKinematics integration
+- `JacobianIKSolver`: Stub — previous version ignored orientation
+- `CartesianPlanner`: Frame interpolation (works once IK is integrated)
+- `JointPlanner`: Linear joint interpolation (no custom math)
+- `TrajectoryOptimizer`: Deleted (smooth_trajectory broke at wrap boundaries)
+
+**NOTE:** MoveIt2 requires ROS2 and is planned for Phase 2 (Docker).
+compas_fab with PyBullet backend is the Phase 1 IK solution.
+`moveit_bridge.py` does NOT exist — it was a phantom file in previous docs.
 
 ### 4. Simulation Module (`src/simulation/`)
 
-Digital twin and process simulation.
+PyBullet-based simulation. **Integrating: pybullet_industrial** for manufacturing.
 
 ```python
 src/simulation/
 ├── __init__.py
-├── world.py           # Simulation world/scene
-├── robot_sim.py       # Robot simulation
-├── process_sim.py     # Process-specific simulation
-├── material.py        # Material deposition/removal
-├── collision.py       # Collision detection
-└── visualization.py   # Rendering utilities
+├── environment.py     # PyBullet environment wrapper + pybullet_industrial import
 ```
 
 **Key Classes:**
-- `SimulationWorld`: pybullet world wrapper
-- `RobotSimulator`: Simulated robot controller
-- `ProcessSimulator`: Abstract process simulation
-- `MaterialSimulator`: Tracks material state
+- `SimulationEnvironment`: PyBullet world wrapper (URDF loading, collision shapes, mesh loading)
+- `create_manufacturing_tool()`: pybullet_industrial integration point (not yet fully implemented)
+
+**NOTE:** Files listed in previous docs (world.py, robot_sim.py, process_sim.py,
+material.py, collision.py, visualization.py) do NOT exist. The actual simulation
+is in `environment.py` only. Collision checking is in `motion/collision.py`.
 
 ### 5. Hardware Module (`src/hardware/`)
 

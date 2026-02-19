@@ -8,6 +8,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { apiClient } from '../api/client';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,7 @@ interface WorkFrameState {
   activeFrameId: string;
 
   // Actions
+  loadFramesFromBackend: () => Promise<void>;
   addFrame: (name?: string) => string;
   removeFrame: (id: string) => void;
   updateFrame: (id: string, updates: Partial<WorkFrame>) => void;
@@ -81,23 +83,45 @@ export const useWorkFrameStore = create<WorkFrameState>()(
       frames: [DEFAULT_FRAME],
       activeFrameId: 'default_workframe',
 
+      loadFramesFromBackend: async () => {
+        try {
+          const res = await apiClient.get('/api/workframes');
+          if (res.data?.status === 'success' && Array.isArray(res.data?.data)) {
+            const backendFrames = res.data.data as WorkFrame[];
+            if (backendFrames.length > 0) {
+              set((state) => {
+                state.frames = backendFrames;
+                if (!backendFrames.find((f) => f.id === state.activeFrameId)) {
+                  state.activeFrameId = backendFrames[0].id;
+                }
+              });
+            }
+          }
+        } catch {
+          // Backend unavailable — keep local frames
+        }
+      },
+
       addFrame: (name?: string) => {
         const id = generateFrameId();
         const frameCount = get().frames.length;
+        const newFrame: WorkFrame = {
+          id,
+          name: name || `Work Frame ${frameCount + 1}`,
+          position: [2000 + frameCount * 500, 0, 0],
+          rotation: [0, 0, 0],
+          size: [1.0, 0.05, 1.0],
+          alignmentMethod: 'manual',
+          childPartIds: [],
+          isDefault: false,
+          visible: true,
+          color: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][frameCount % 5],
+        };
         set((state) => {
-          state.frames.push({
-            id,
-            name: name || `Work Frame ${frameCount + 1}`,
-            position: [2000 + frameCount * 500, 0, 0],
-            rotation: [0, 0, 0],
-            size: [1.0, 0.05, 1.0],
-            alignmentMethod: 'manual',
-            childPartIds: [],
-            isDefault: false,
-            visible: true,
-            color: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][frameCount % 5],
-          });
+          state.frames.push(newFrame);
         });
+        // Sync to backend (fire-and-forget)
+        apiClient.post('/api/workframes', newFrame).catch(() => {});
         return id;
       },
 
@@ -120,6 +144,8 @@ export const useWorkFrameStore = create<WorkFrameState>()(
             state.activeFrameId = state.frames[0]?.id || 'default_workframe';
           }
         });
+        // Sync to backend (fire-and-forget)
+        apiClient.delete(`/api/workframes/${id}`).catch(() => {});
       },
 
       updateFrame: (id: string, updates: Partial<WorkFrame>) => {
@@ -129,6 +155,8 @@ export const useWorkFrameStore = create<WorkFrameState>()(
             Object.assign(frame, updates);
           }
         });
+        // Sync to backend (fire-and-forget)
+        apiClient.put(`/api/workframes/${id}`, updates).catch(() => {});
       },
 
       setActiveFrame: (id: string) => {

@@ -266,16 +266,18 @@ class TestKinematicsEngine:
         assert isinstance(frame, Frame)
         robot._robot.forward_kinematics.assert_called_once()
 
-    def test_inverse_kinematics_not_implemented(
+    def test_inverse_kinematics_with_fake_urdf(
         self, mock_robot_model, mock_robot_config
     ):
-        """Test that IK raises NotImplementedError (Phase 2 feature)."""
+        """Test that IK raises RobotError when URDF path is invalid."""
         robot = RobotInstance(model=mock_robot_model, config=mock_robot_config)
         engine = KinematicsEngine(robot)
 
         target_frame = Frame.worldXY()
 
-        with pytest.raises(NotImplementedError, match="motion planning backend"):
+        # With a fake URDF path, IK should raise RobotError
+        # (the file doesn't exist, so PyBullet can't load it)
+        with pytest.raises(RobotError, match="Inverse kinematics failed"):
             engine.inverse_kinematics(target_frame)
 
     def test_check_collision_not_implemented(

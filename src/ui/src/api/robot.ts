@@ -25,6 +25,7 @@ export interface FKResult {
   valid: boolean;
   mock?: boolean;
   error?: string;
+  solver?: string;
 }
 
 export interface IKResult {
@@ -54,6 +55,61 @@ export interface RobotState {
   joint_positions: number[];
   tcp_position: number[];
   tcp_orientation: number[];
+}
+
+export interface ToolInfo {
+  id: string;
+  name: string;
+  type: string;
+  tcpOffset: number[];
+  mass: number;
+  description: string;
+  properties: Record<string, any>;
+}
+
+/**
+ * Get available tools from backend config/tools/*.yaml
+ */
+export async function getTools(): Promise<ToolInfo[]> {
+  try {
+    const response = await apiClient.get<ApiResponse<ToolInfo[]>>('/api/tools');
+    return response.data.data || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Connect to robot via backend
+ */
+export async function connectRobot(): Promise<RobotState> {
+  const response = await apiClient.post<ApiResponse<RobotState>>('/api/robot/connect');
+  if (response.data.status === 'success' && response.data.data) {
+    return response.data.data;
+  }
+  throw new Error(response.data.error || 'Failed to connect robot');
+}
+
+/**
+ * Disconnect robot via backend
+ */
+export async function disconnectRobot(): Promise<RobotState> {
+  const response = await apiClient.post<ApiResponse<RobotState>>('/api/robot/disconnect');
+  if (response.data.status === 'success' && response.data.data) {
+    return response.data.data;
+  }
+  throw new Error(response.data.error || 'Failed to disconnect robot');
+}
+
+/**
+ * Home robot via backend (move all joints to 0)
+ */
+export async function homeRobot(): Promise<RobotState> {
+  const response = await apiClient.post<ApiResponse<RobotState>>('/api/robot/home');
+  if (response.data.status === 'success' && response.data.data) {
+    return response.data.data;
+  }
+  throw new Error(response.data.error || 'Failed to home robot');
 }
 
 /**
@@ -106,10 +162,12 @@ export async function loadRobot(robotName: string = 'abb_irb6700'): Promise<bool
 }
 
 /**
- * Compute forward kinematics
+ * Compute forward kinematics.
+ * Uses roboticstoolbox-python DHRobot.fkine() on the backend.
+ * When tcpOffset is provided, robot.tool is set so fkine returns TCP position.
  */
-export async function computeFK(jointValues: number[]): Promise<FKResult> {
-  const response = await apiClient.post<ApiResponse<FKResult>>('/api/robot/fk', { jointValues });
+export async function computeFK(jointValues: number[], tcpOffset?: number[]): Promise<FKResult> {
+  const response = await apiClient.post<ApiResponse<FKResult>>('/api/robot/fk', { jointValues, tcpOffset });
   if (response.data.status === 'success' && response.data.data) {
     return response.data.data;
   }

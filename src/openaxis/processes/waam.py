@@ -230,73 +230,53 @@ class WAAMProcess(ProcessPlugin):
         """
         Calculate material deposition rate.
 
-        Returns:
-            Deposition rate in mm³/s
+        Raises:
+            NotImplementedError: Always — requires validated thermal model.
         """
-        # Simplified calculation based on wire feed rate and diameter
-        wire_area = np.pi * (self.params.wire_diameter / 2) ** 2
-        volume_rate = wire_area * self.params.wire_feed_rate
-
-        # Account for melting efficiency (~80%)
-        efficiency = 0.8
-        deposition_rate = volume_rate * efficiency
-
-        return deposition_rate
+        raise NotImplementedError(
+            "Custom deposition rate calculation deleted (used magic 0.8 efficiency). "
+            "Integrate validated thermal model (Goldak double-ellipsoid, or "
+            "Rosenthal moving point source) from welding research literature."
+        )
 
     def calculate_heat_input(self) -> float:
         """
         Calculate welding heat input.
 
-        Returns:
-            Heat input in kJ/mm
+        DELETED: Formula was Q = V*I / (speed * 1000), missing arc efficiency
+        factor (eta). Correct formula is Q = eta * V * I / speed, where
+        eta depends on process (GMAW: 0.7-0.85, GTAW: 0.6-0.7, SAW: 0.9-0.99).
+        Omitting eta gives 20-40% error.
+
+        Reference: AWS D1.1 Structural Welding Code, Annex H.
+
+        Raises:
+            NotImplementedError: Always — requires arc efficiency factor.
         """
-        # Heat input = (Voltage * Current) / (Travel Speed * 1000)
-        voltage = self.params.arc_voltage
-        current = self.params.arc_current
-        speed = self.params.travel_speed
-
-        if speed <= 0:
-            return 0.0
-
-        heat_input = (voltage * current) / (speed * 1000)
-        return heat_input
+        raise NotImplementedError(
+            "Custom heat input calculation deleted (missing arc efficiency factor). "
+            "Correct formula: Q = eta * V * I / speed. "
+            "Arc efficiency (eta) depends on process type: "
+            "GMAW 0.7-0.85, GTAW 0.6-0.7, SAW 0.9-0.99. "
+            "Reference: AWS D1.1, Annex H."
+        )
 
     def get_welding_parameters(self, segment_type: ToolpathType) -> dict:
         """
         Get process parameters for a segment type.
 
-        Args:
-            segment_type: Type of toolpath segment
+        DELETED: Used magic multipliers (1.05x voltage, 1.1x current for infill)
+        with no empirical or theoretical basis.
 
-        Returns:
-            Dictionary of welding parameters
+        Raises:
+            NotImplementedError: Always — multipliers need empirical validation.
         """
-        if segment_type == ToolpathType.PERIMETER:
-            # Perimeters: standard parameters
-            return {
-                "voltage": self.params.arc_voltage,
-                "current": self.params.arc_current,
-                "wire_feed": self.params.wire_feed_rate,
-                "travel_speed": self.params.travel_speed,
-                "weave": self.params.weave_width,
-            }
-        elif segment_type == ToolpathType.INFILL:
-            # Infill: can go faster with higher heat
-            return {
-                "voltage": self.params.arc_voltage * 1.05,
-                "current": self.params.arc_current * 1.1,
-                "wire_feed": self.params.wire_feed_rate * 1.1,
-                "travel_speed": self.params.travel_speed * 1.2,
-                "weave": 0.0,  # No weave for infill
-            }
-        else:  # Travel
-            return {
-                "voltage": 0.0,
-                "current": 0.0,
-                "wire_feed": 0.0,
-                "travel_speed": 100.0,  # Fast travel
-                "weave": 0.0,
-            }
+        raise NotImplementedError(
+            "Custom welding parameter multipliers deleted (magic 1.05x voltage, "
+            "1.1x current for infill had no empirical basis). "
+            "Integrate validated welding parameter database or "
+            "process-specific lookup tables from welding research."
+        )
 
     def requires_inter_layer_cooling(self, layer_index: int) -> bool:
         """

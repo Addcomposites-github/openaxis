@@ -4,8 +4,6 @@ import { checkHealth } from '../api/client';
 import { useProjectStore } from '../stores/projectStore';
 import html2canvas from 'html2canvas';
 import {
-  HomeIcon,
-  FolderIcon,
   CubeIcon,
   ChartBarIcon,
   CogIcon,
@@ -23,8 +21,6 @@ interface NavItem {
 }
 
 const navigation: NavItem[] = [
-  { name: 'Dashboard', path: '/', icon: HomeIcon },
-  { name: 'Projects', path: '/projects', icon: FolderIcon },
   { name: 'Workspace', path: '/workspace', icon: CubeIcon },
   { name: 'Monitoring', path: '/monitoring', icon: ChartBarIcon },
   { name: 'Settings', path: '/settings', icon: CogIcon },
@@ -122,9 +118,7 @@ export default function Layout({ children }: LayoutProps) {
         {/* Navigation */}
         <nav className="flex-1 px-4 py-4 space-y-1">
           {navigation.map((item) => {
-            const isActive = item.path === '/'
-              ? location.pathname === '/'
-              : location.pathname.startsWith(item.path);
+            const isActive = location.pathname.startsWith(item.path);
             const Icon = item.icon;
 
             return (
@@ -173,9 +167,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="flex items-center space-x-4">
             <h1 className="text-lg font-semibold text-gray-900">
               {navigation.find((item) =>
-                item.path === '/'
-                  ? location.pathname === '/'
-                  : location.pathname.startsWith(item.path)
+                location.pathname.startsWith(item.path)
               )?.name || 'OpenAxis'}
             </h1>
             {currentProject && (

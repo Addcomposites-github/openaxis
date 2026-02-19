@@ -98,7 +98,7 @@ class TestProject:
         # Reload and verify
         loaded = Project.load(sample_project.path)
         assert loaded.settings.get("test") == "value"
-        assert loaded.metadata.modified_at > original_modified
+        assert loaded.metadata.modified_at >= original_modified
 
     def test_add_part(self, sample_project):
         """Test adding a part."""

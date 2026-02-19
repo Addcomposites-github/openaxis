@@ -64,7 +64,7 @@ export async function generateToolpath(
     params,
     ...(partPosition && { partPosition: [partPosition.x, partPosition.y, partPosition.z] }),
   }, {
-    timeout: 120000, // Slicing can take >30s for complex geometry
+    timeout: 300000, // 5 min — ORNL Slicer 2 subprocess can be slow for large models
   });
 
   if (response.data.status === 'success' && response.data.data) {

@@ -20,6 +20,7 @@ export interface CellSetup {
     basePosition: [number, number, number];
     baseRotation: [number, number, number]; // degrees
     model: string;
+    homePosition: number[];  // 6 joint values in radians
   };
   endEffector: {
     type: 'waam_torch' | 'pellet_extruder' | 'spindle' | 'none';
@@ -114,6 +115,8 @@ interface WorkspaceState {
   reachability: boolean[] | null;
   ikStatus: IKStatus;
   trajectory: TrajectoryData | null;
+  homeJoints: number[] | null;    // home position in radians (set after IK computes)
+  homeTransitTime: number;        // seconds to transit to/from home (default 2.0)
 
   // Actions — Mode
   setMode: (mode: WorkspaceMode) => void;
@@ -147,6 +150,8 @@ interface WorkspaceState {
   setReachability: (reach: boolean[] | null) => void;
   setIKStatus: (status: IKStatus) => void;
   setTrajectory: (traj: TrajectoryData | null) => void;
+  setHomeJoints: (joints: number[] | null) => void;
+  setHomeTransitTime: (time: number) => void;
 }
 
 // ─── Default Values ──────────────────────────────────────────────────────────
@@ -156,6 +161,7 @@ const defaultCellSetup: CellSetup = {
     basePosition: [0, 0, 0],
     baseRotation: [-90, 0, 0],
     model: 'abb_irb6700',
+    homePosition: [0, -0.5, 0.5, 0, -0.5, 0],  // radians — matches backend default
   },
   endEffector: {
     type: 'waam_torch',
@@ -224,6 +230,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       reachability: null,
       ikStatus: 'idle' as IKStatus,
       trajectory: null,
+      homeJoints: null,
+      homeTransitTime: 2.0,
 
       // ── Actions ──────────────────────────────────────────────────────────
 
@@ -385,6 +393,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           state.jointTrajectory = null;
           state.reachability = null;
           state.ikStatus = 'idle';
+          state.homeJoints = null;
+        }),
+
+      setHomeJoints: (joints) =>
+        set((state) => {
+          state.homeJoints = joints;
+        }),
+
+      setHomeTransitTime: (time) =>
+        set((state) => {
+          state.homeTransitTime = time;
         }),
     })),
     {
@@ -404,6 +423,37 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         simMode: state.simMode,
         jointAngles: state.jointAngles,
       }),
+      // Deep-merge cellSetup so new fields (e.g. homePosition) get defaults
+      // even when old localStorage state doesn't have them.
+      merge: (persisted, current) => {
+        const p = (persisted as Record<string, unknown>) || {};
+        const pSetup = (p.cellSetup as Record<string, unknown>) || {};
+        const cur = current as WorkspaceState;
+        return {
+          ...cur,
+          ...p,
+          cellSetup: {
+            ...cur.cellSetup,
+            ...pSetup,
+            robot: {
+              ...cur.cellSetup.robot,
+              ...((pSetup.robot as Record<string, unknown>) || {}),
+            },
+            endEffector: {
+              ...cur.cellSetup.endEffector,
+              ...((pSetup.endEffector as Record<string, unknown>) || {}),
+            },
+            externalAxis: {
+              ...cur.cellSetup.externalAxis,
+              ...((pSetup.externalAxis as Record<string, unknown>) || {}),
+            },
+            processConfig: {
+              ...cur.cellSetup.processConfig,
+              ...((pSetup.processConfig as Record<string, unknown>) || {}),
+            },
+          },
+        } as WorkspaceState;
+      },
     }
   )
 );

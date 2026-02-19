@@ -11,6 +11,7 @@ kinematics:
   type: "6dof"
   base_frame: "base_link"
   tool_frame: "tool0"
+  home_position: [0.0, -0.5, 0.5, 0.0, -0.5, 0.0]  # radians — safe default home
   dh_parameters:
     # Standard DH parameters (if needed for custom IK)
     # a, d, alpha, theta_offset

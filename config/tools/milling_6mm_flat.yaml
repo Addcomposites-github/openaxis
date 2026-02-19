@@ -1,0 +1,19 @@
+# 6mm Flat End Mill
+# Standard milling tool for subtractive manufacturing
+
+tool:
+  name: "6mm Flat End Mill"
+  type: "milling"
+  urdf_path: "urdf/tools/milling_tool.urdf"
+  tcp_offset: [0, 0, 0.15, 0, 0, 0]
+  mass: 2.0
+  description: "6mm flat end mill for roughing and finishing operations"
+
+properties:
+  diameter: 6.0  # mm
+  rotation_speed: 10000  # RPM
+  number_of_teeth: 4
+  height: 50.0  # mm
+  number_of_rays: 1
+  flute_length: 20.0  # mm
+  material: "carbide"

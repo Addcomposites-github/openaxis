@@ -1,8 +1,26 @@
 """
 Motion planning for robotic manipulators.
 
-This module provides path and trajectory planning capabilities including
-Cartesian paths, joint-space interpolation, and trajectory optimization.
+This module provides path planning capabilities. CartesianPlanner and
+JointPlanner are retained as data-flow wrappers that will delegate to
+compas_fab planning backends once IK is integrated.
+
+DELETED: TrajectoryOptimizer.smooth_trajectory() — averaged joint angles
+across a moving window. Joint angle averaging breaks at wrap boundaries
+(170deg -> -170deg averages to 0deg). This is mathematically wrong and
+dangerous for real robots.
+
+DELETED: TrajectoryOptimizer.time_parameterize() — divided distance by
+max_velocity without considering acceleration limits, jerk, or dynamics.
+
+TODO: Replace trajectory optimization with ruckig or topp-ra library.
+- ruckig: Time-optimal trajectory generation with jerk limits
+- topp-ra: Time-Optimal Path Parameterization based on Reachability Analysis
+
+Library references:
+- compas_fab: https://gramaziokohler.github.io/compas_fab/
+- ruckig: https://github.com/pantor/ruckig
+- topp-ra: https://github.com/hungpham2511/toppra
 """
 
 from typing import List, Optional, Tuple
@@ -10,7 +28,6 @@ from typing import List, Optional, Tuple
 import numpy as np
 from compas.geometry import Frame, Point, Vector
 from compas_robots import Configuration, RobotModel
-from scipy.spatial.transform import Rotation, Slerp
 
 from openaxis.core.exceptions import RobotError
 from openaxis.motion.kinematics import IKSolver
@@ -22,6 +39,10 @@ class CartesianPlanner:
 
     Generates a sequence of frames along a straight line from start to goal,
     then solves IK for each waypoint.
+
+    NOTE: This planner depends on IKSolver.solve() which is currently
+    not implemented (pending compas_fab integration). Calling plan_linear()
+    or plan_circular() will raise NotImplementedError from the IK solver.
     """
 
     def __init__(self, robot: RobotModel, ik_solver: Optional[IKSolver] = None):
@@ -45,6 +66,9 @@ class CartesianPlanner:
         """
         Plan a straight-line Cartesian path.
 
+        NOTE: Will raise NotImplementedError until IK solver is integrated
+        with compas_fab backend.
+
         Args:
             start_frame: Starting end-effector pose
             goal_frame: Goal end-effector pose
@@ -54,6 +78,9 @@ class CartesianPlanner:
         Returns:
             List of configurations along the path, or None if IK fails
         """
+        # Import here to avoid import at module level for an unimplemented feature
+        from scipy.spatial.transform import Rotation, Slerp
+
         # Compute path length
         start_pos = np.array(start_frame.point)
         goal_pos = np.array(goal_frame.point)
@@ -83,20 +110,18 @@ class CartesianPlanner:
             frame = Frame(Point(*pos), xaxis, yaxis)
             frames.append(frame)
 
-        # Solve IK for each waypoint
+        # Solve IK for each waypoint (will raise NotImplementedError until
+        # compas_fab backend is integrated)
         configurations = []
         prev_config = None
 
         for frame in frames:
-            # Use previous solution as initial guess
             initial_guess = prev_config.joint_values if prev_config else None
-
             config = self.ik_solver.solve(
                 frame, link_name=link_name, initial_guess=initial_guess
             )
 
             if config is None:
-                # IK failed
                 return None
 
             configurations.append(config)
@@ -116,6 +141,8 @@ class CartesianPlanner:
     ) -> Optional[List[Configuration]]:
         """
         Plan a circular arc path.
+
+        NOTE: Will raise NotImplementedError until IK solver is integrated.
 
         Args:
             center: Center point of the circle
@@ -140,32 +167,29 @@ class CartesianPlanner:
         angles = np.linspace(start_angle, end_angle, n_waypoints + 1)
 
         # Create perpendicular axes for the circle
-        normal = np.array(normal)
-        normal = normal / np.linalg.norm(normal)
+        normal_arr = np.array(normal)
+        normal_arr = normal_arr / np.linalg.norm(normal_arr)
 
         # Choose arbitrary perpendicular vector
-        if abs(normal[2]) < 0.9:
-            perp1 = np.cross(normal, [0, 0, 1])
+        if abs(normal_arr[2]) < 0.9:
+            perp1 = np.cross(normal_arr, [0, 0, 1])
         else:
-            perp1 = np.cross(normal, [1, 0, 0])
+            perp1 = np.cross(normal_arr, [1, 0, 0])
         perp1 = perp1 / np.linalg.norm(perp1)
 
-        perp2 = np.cross(normal, perp1)
+        perp2 = np.cross(normal_arr, perp1)
 
         # Generate frames
         frames = []
         center_arr = np.array(center)
 
         for angle in angles:
-            # Position on circle
             pos = center_arr + radius * (np.cos(angle) * perp1 + np.sin(angle) * perp2)
-
-            # Frame with Z pointing towards center
             tangent = -np.sin(angle) * perp1 + np.cos(angle) * perp2
-            frame = Frame(Point(*pos), Vector(*tangent), Vector(*normal))
+            frame = Frame(Point(*pos), Vector(*tangent), Vector(*normal_arr))
             frames.append(frame)
 
-        # Solve IK for each waypoint
+        # Solve IK for each waypoint (will raise NotImplementedError)
         configurations = []
         prev_config = None
 
@@ -189,7 +213,8 @@ class JointPlanner:
     Plans paths in joint space.
 
     This is simpler than Cartesian planning as it only requires interpolation
-    between joint configurations without IK.
+    between joint configurations without IK. Uses linear interpolation —
+    no custom math, just numpy linspace between joint values.
     """
 
     def __init__(self, robot: RobotModel):
@@ -221,14 +246,10 @@ class JointPlanner:
         start_values = np.array(start_config.joint_values)
         goal_values = np.array(goal_config.joint_values)
 
-        # Compute distance
         diff = goal_values - start_values
         distance = np.linalg.norm(diff)
-
-        # Number of waypoints
         n_waypoints = max(int(distance / resolution), 2)
 
-        # Interpolate
         configurations = []
         for i in range(n_waypoints + 1):
             t = i / n_waypoints
@@ -258,13 +279,11 @@ class JointPlanner:
         if len(waypoints) < 2:
             return waypoints
 
-        # Plan between each pair of waypoints
         full_path = []
         for i in range(len(waypoints) - 1):
             segment = self.plan_joint_path(
                 waypoints[i], waypoints[i + 1], resolution
             )
-            # Avoid duplicating waypoints
             if i > 0:
                 segment = segment[1:]
             full_path.extend(segment)
@@ -274,10 +293,19 @@ class JointPlanner:
 
 class TrajectoryOptimizer:
     """
-    Optimizes trajectories for time and smoothness.
+    Trajectory optimization — deleted.
 
-    This module applies post-processing to trajectories to make them
-    smoother and more efficient.
+    DELETED: smooth_trajectory() averaged joint angles across a moving window.
+    Joint angle averaging breaks at wrap boundaries (170deg -> -170deg
+    averages to 0deg instead of 180deg). This is mathematically wrong and
+    dangerous for real robots.
+
+    DELETED: time_parameterize() used distance/max_velocity without
+    considering acceleration limits, jerk limits, or dynamic constraints.
+
+    TODO: Integrate a proven trajectory optimization library:
+    - ruckig: Time-optimal trajectory with jerk limits (pip install ruckig)
+    - topp-ra: Time-Optimal Path Parameterization (pip install toppra)
     """
 
     @staticmethod
@@ -289,67 +317,32 @@ class TrajectoryOptimizer:
         """
         Compute time stamps for each configuration.
 
-        Args:
-            configurations: Path configurations
-            max_velocity: Maximum joint velocity (rad/s)
-            max_acceleration: Maximum joint acceleration (rad/s²)
+        Not yet implemented with a proper time-optimal parameterization library.
 
-        Returns:
-            List of (configuration, time) tuples
+        Raises:
+            NotImplementedError: Always — pending ruckig or topp-ra integration.
         """
-        if len(configurations) < 2:
-            return [(cfg, 0.0) for cfg in configurations]
-
-        # Compute segment durations
-        timestamps = [0.0]
-
-        for i in range(1, len(configurations)):
-            prev_values = np.array(configurations[i - 1].joint_values)
-            curr_values = np.array(configurations[i].joint_values)
-
-            # Distance in joint space
-            distance = np.linalg.norm(curr_values - prev_values)
-
-            # Simple time calculation (could be improved with acceleration limits)
-            time = distance / max_velocity
-            timestamps.append(timestamps[-1] + time)
-
-        return list(zip(configurations, timestamps))
+        raise NotImplementedError(
+            "Custom time parameterization deleted (ignored acceleration limits). "
+            "Integrate ruckig or topp-ra for time-optimal trajectory generation."
+        )
 
     @staticmethod
     def smooth_trajectory(
         configurations: List[Configuration], window_size: int = 3
     ) -> List[Configuration]:
         """
-        Smooth a trajectory using moving average.
+        Smooth a trajectory.
 
-        Args:
-            configurations: Input trajectory
-            window_size: Smoothing window size (must be odd)
+        DELETED: Moving average smoothing breaks at joint wrap boundaries
+        (170deg -> -170deg averages to 0deg). This is mathematically wrong.
 
-        Returns:
-            Smoothed trajectory
+        Raises:
+            NotImplementedError: Always — pending ruckig or topp-ra integration.
         """
-        if len(configurations) < window_size:
-            return configurations
-
-        # Convert to numpy array
-        values = np.array([cfg.joint_values for cfg in configurations])
-
-        # Apply moving average
-        smoothed = np.copy(values)
-        half_window = window_size // 2
-
-        for i in range(half_window, len(values) - half_window):
-            smoothed[i] = np.mean(
-                values[i - half_window : i + half_window + 1], axis=0
-            )
-
-        # Convert back to configurations
-        joint_names = configurations[0].joint_names
-        smoothed_configs = [
-            Configuration.from_revolute_values(vals.tolist(), joint_names)
-            for vals in smoothed
-        ]
-
-        return smoothed_configs
+        raise NotImplementedError(
+            "Custom trajectory smoothing deleted (joint angle averaging "
+            "breaks at wrap boundaries: 170deg -> -170deg averages to 0deg). "
+            "Integrate ruckig or topp-ra for proper trajectory smoothing "
+            "that respects joint topology."
+        )

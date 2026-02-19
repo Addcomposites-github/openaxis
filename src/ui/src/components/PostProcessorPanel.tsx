@@ -9,7 +9,7 @@
  * - Export button with file download
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   DocumentArrowDownIcon,
   ChevronDownIcon,
@@ -52,8 +52,14 @@ export default function PostProcessorPanel() {
   const setConfig = usePostProcessorStore((s) => s.setConfig);
   const setHook = usePostProcessorStore((s) => s.setHook);
   const setLastExportResult = usePostProcessorStore((s) => s.setLastExportResult);
+  const loadFormats = usePostProcessorStore((s) => s.loadFormatsFromBackend);
 
   const toolpathData = useWorkspaceStore((s) => s.toolpathData);
+
+  // Fetch available formats from backend on mount
+  useEffect(() => {
+    loadFormats();
+  }, [loadFormats]);
 
   const [hooksExpanded, setHooksExpanded] = useState(false);
   const [varsExpanded, setVarsExpanded] = useState(false);
@@ -397,6 +403,9 @@ export default function PostProcessorPanel() {
         <div className="bg-gray-50 p-2 rounded-lg">
           <p className="text-xs text-gray-500">
             <strong>{selectedFormat.name}</strong> ({selectedFormat.vendor}) — {selectedFormat.description}
+          </p>
+          <p className="text-xs text-gray-400 mt-1 font-mono">
+            Powered by openaxis.postprocessor
           </p>
         </div>
       )}

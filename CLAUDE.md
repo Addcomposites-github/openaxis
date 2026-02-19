@@ -9,11 +9,13 @@ OpenAxis is an industry-ready, open-source alternative to Adaxis AdaOne for robo
 ## Tech Stack
 
 - **Language:** Python 3.10+ (core), TypeScript (UI)
-- **Core Framework:** COMPAS ecosystem (compas, compas_fab, compas_slicer)
-- **Motion Planning:** MoveIt2 via ROS2 Humble
-- **Simulation:** pybullet_industrial
-- **Slicing:** ORNL Slicer 2 integration
-- **Hardware Abstraction:** Robot Raconteur
+- **Core Framework:** COMPAS ecosystem (compas, compas_fab) — Integrated
+- **Slicing:** compas_slicer — Integrating (planar_slicer delegates to compas_slicer; other slicers raise NotImplementedError)
+- **IK / Motion Planning:** compas_fab with PyBullet backend — Integrating (IK solver stubs raise NotImplementedError pending compas_fab backend)
+- **Simulation:** PyBullet (base) + pybullet_industrial (manufacturing) — pybullet_industrial imported, not yet fully integrated
+- **Hardware Abstraction:** Robot Raconteur — NOT integrated (Phase 4)
+- **Production Motion Planning:** MoveIt2 via ROS2 Humble — NOT integrated (Phase 2, requires Docker)
+- **Production Slicing:** ORNL Slicer 2 — NOT integrated (C++ desktop app, Phase 2 subprocess wrapper)
 - **UI:** Electron + React + Three.js
 
 ## Commands
@@ -46,10 +48,10 @@ docker compose -f docker/docker-compose.yml up simulation  # Simulation only
 openaxis/
 ├── src/
 │   ├── core/           # Core data structures, utilities, config
-│   ├── slicing/        # Toolpath generation (ORNL Slicer 2, custom)
-│   ├── motion/         # Motion planning (MoveIt2, IK, trajectory)
-│   ├── simulation/     # Digital twin (pybullet_industrial)
-│   ├── hardware/       # Robot drivers, sensors (Robot Raconteur)
+│   ├── slicing/        # Toolpath generation (compas_slicer backend, others NotImplementedError)
+│   ├── motion/         # Motion planning (IK/planner stubs pending compas_fab integration)
+│   ├── simulation/     # PyBullet environment (pybullet_industrial integration pending)
+│   ├── hardware/       # Robot drivers, sensors (stubs — Robot Raconteur Phase 4)
 │   └── ui/             # Electron/React frontend
 ├── docs/               # Architecture, API, guides
 ├── tests/              # Unit, integration, e2e tests
@@ -60,9 +62,9 @@ openaxis/
 ## Key Design Decisions
 
 1. **Plugin Architecture:** Each process type (WAAM, pellet, milling) is a plugin
-2. **Hardware Abstraction:** Robot Raconteur provides vendor-agnostic hardware layer
-3. **ROS2 for Motion:** MoveIt2 handles all motion planning via ROS2
-4. **Modular Slicing:** ORNL Slicer 2 as primary, custom slicers as plugins
+2. **Hardware Abstraction:** Robot Raconteur provides vendor-agnostic hardware layer (Phase 4)
+3. **IK/Motion Planning:** compas_fab with PyBullet backend (Phase 1); MoveIt2 via ROS2 for production (Phase 2)
+4. **Modular Slicing:** compas_slicer for Python-native slicing; ORNL Slicer 2 as production slicer (Phase 2 subprocess)
 5. **Offline-First:** All simulation/planning works without hardware connected
 
 ## Development Phases
@@ -87,6 +89,27 @@ See @docs/ROADMAP.md for detailed phase breakdown:
 - Integration: `tests/integration/` - With simulation
 - E2E: `tests/e2e/` - Full stack with mock hardware
 - Hardware: `tests/hardware/` - Requires physical setup (manual)
+
+## CRITICAL: No Ungrounded Custom Implementations
+
+When a library integration is specified in the architecture:
+1. INTEGRATE the actual library, or
+2. Find a PROVEN alternative (pip-installable, research-backed, actively maintained), or
+3. STOP and report that the feature cannot be implemented yet
+4. NEVER silently substitute custom code
+
+All mathematical algorithms MUST either:
+- Call a proven library function (cite the library and function), or
+- Cite the specific research paper/textbook/standard the algorithm comes from
+- Be explicitly marked as "UNVALIDATED — needs research citation"
+
+LLM-generated math without citations is NOT acceptable. No new math needs to
+be invented — proven libraries exist for robotics, slicing, IK, and physics.
+
+If a specified library cannot be pip-installed or integrated:
+- Document WHY it can't be integrated (e.g., "C++ desktop app, not a Python library")
+- Find a proven pip-installable alternative from the same ecosystem
+- If no alternative exists, raise NotImplementedError with a clear message
 
 ## Important Notes
 

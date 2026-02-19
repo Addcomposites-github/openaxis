@@ -5,8 +5,8 @@ Handles robot configuration, forward/inverse kinematics, and joint limits.
 
 IK Strategy:
   Primary: roboticstoolbox-python (Peter Corke) — production-grade, DH-based,
-           30-90µs per solve with C++ backend. Well-tested, URDF-aware.
-  Fallback: Custom numerical IK via scipy (IKSolver / JacobianIKSolver).
+           30-90us per solve with C++ backend. Well-tested, URDF-aware.
+  Fallback: compas_fab PyBulletClient IK (damped least-squares via PyBullet).
 
 For large toolpaths (200K+ waypoints), IK is solved in chunks (not all at once)
 to keep memory low and enable progressive streaming to the frontend.
@@ -29,11 +29,11 @@ except ImportError:
     RTB_AVAILABLE = False
     print("Warning: roboticstoolbox-python not installed. Using fallback IK solver.")
 
-# ── Fallback IK: custom compas-based solvers ─────────────────────────────────
+# ── Fallback IK: compas_fab PyBulletClient ───────────────────────────────────
 try:
     from openaxis.core.config import ConfigManager, RobotConfig
     from openaxis.core.robot import RobotLoader, RobotInstance
-    from openaxis.motion.kinematics import IKSolver, JacobianIKSolver
+    from openaxis.motion.kinematics import IKSolver
     from compas.geometry import Frame, Point, Vector
     from compas_robots import Configuration
     CONFIG_AVAILABLE = True
@@ -85,7 +85,6 @@ class RobotService:
     def __init__(self, config_dir: Optional[str] = None):
         self._robot_instance: Optional[Any] = None
         self._ik_solver: Optional[Any] = None
-        self._jacobian_solver: Optional[Any] = None
         self._config_manager: Optional[Any] = None
 
         # Production IK: roboticstoolbox DH model (always available, no URDF loading needed)
@@ -119,6 +118,7 @@ class RobotService:
                 "type": config.type,
                 "baseFrame": config.base_frame,
                 "toolFrame": config.tool_frame,
+                "homePosition": config.home_position,
                 "urdfPath": config.urdf_path,
                 "jointLimits": config.joint_limits,
                 "communication": config.communication,
@@ -145,12 +145,47 @@ class RobotService:
 
             self._robot_instance = RobotLoader.load_from_config(config)
             tool_frame = self._robot_instance.config.tool_frame
-            self._ik_solver = IKSolver(self._robot_instance.model, tool_frame=tool_frame)
-            self._jacobian_solver = JacobianIKSolver(self._robot_instance.model, tool_frame=tool_frame)
+            # IKSolver uses compas_fab PyBulletClient for IK solving.
+            # Use 'link_6' for IK (tool0 has a fixed rotation that confuses
+            # PyBullet's numerical IK solver).
+            self._ik_solver = IKSolver(
+                self._robot_instance.model,
+                urdf_path=urdf_path,
+                tool_frame="link_6",
+            )
             return True
         except Exception as e:
             print(f"Warning: Failed to load robot: {e}")
             return False
+
+    def _get_home_position(self, n_joints: int = 6) -> list[float]:
+        """Get home position from robot config, or use default.
+
+        The home position is used as the initial IK seed for predictable
+        sim-to-reality behavior. Users can set it per-robot via YAML config.
+
+        Args:
+            n_joints: Expected number of joints (for validation/padding).
+
+        Returns:
+            Home joint configuration in radians.
+        """
+        default_home = [0.0, -0.5, 0.5, 0.0, -0.5, 0.0]
+
+        if self._robot_instance and hasattr(self._robot_instance, 'config'):
+            home = self._robot_instance.config.home_position
+            if home and len(home) >= n_joints:
+                return list(home[:n_joints])
+
+        if self._config_manager:
+            try:
+                config = self._config_manager.get_robot("abb_irb6700")
+                if config.home_position and len(config.home_position) >= n_joints:
+                    return list(config.home_position[:n_joints])
+            except Exception:
+                pass
+
+        return default_home[:n_joints]
 
     def get_joint_limits(self) -> Dict[str, Any]:
         """Get joint limits for the loaded robot."""
@@ -166,42 +201,63 @@ class RobotService:
             }
         return self._default_joint_limits()
 
-    def forward_kinematics(self, joint_values: List[float]) -> Dict[str, Any]:
-        """Compute forward kinematics."""
-        if not self._robot_instance:
-            return self._mock_fk(joint_values)
+    def forward_kinematics(
+        self, joint_values: List[float], tcp_offset: Optional[List[float]] = None,
+    ) -> Dict[str, Any]:
+        """Compute forward kinematics using roboticstoolbox-python DHRobot.fkine().
 
+        Uses the SAME DH model as the IK solver (self._rtb_robot) for
+        consistency. When tcp_offset is provided, robot.tool is set so
+        fkine() returns the TCP position (not just the flange).
+
+        Library: roboticstoolbox-python (Peter Corke)
+        fkine() computes T = base * L1*L2*...*L6 * tool
+        Reference: Peter Corke, "Robotics, Vision and Control", Springer 2023.
+        """
+        if not RTB_AVAILABLE or self._rtb_robot is None:
+            return {
+                "valid": False,
+                "error": "roboticstoolbox-python not available",
+                "solver": "none",
+            }
+
+        robot = self._rtb_robot
+        original_tool = robot.tool
         try:
-            joint_names = self._robot_instance.get_joint_names()
-            config = Configuration.from_revolute_values(
-                joint_values[:len(joint_names)], joint_names
-            )
+            # Set tool transform if tcp_offset provided
+            if tcp_offset and len(tcp_offset) >= 3:
+                tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
+                robot.tool = SE3(tx, ty, tz)
 
-            # Use tool frame from config (default: tool0) as end-effector link
-            ee_link = self._robot_instance.config.tool_frame
+            q = np.array(joint_values[:6])
+            T = robot.fkine(q)
 
-            frame = self._robot_instance.model.forward_kinematics(config, link_name=ee_link)
+            # SE3.t = translation [x,y,z], SE3.R = 3x3 rotation matrix
+            pos = T.t
+            R = T.R
 
             return {
                 "position": {
-                    "x": float(frame.point.x),
-                    "y": float(frame.point.y),
-                    "z": float(frame.point.z),
+                    "x": float(pos[0]),
+                    "y": float(pos[1]),
+                    "z": float(pos[2]),
                 },
                 "orientation": {
-                    "xaxis": [float(v) for v in frame.xaxis],
-                    "yaxis": [float(v) for v in frame.yaxis],
-                    "zaxis": [float(v) for v in frame.zaxis],
+                    "xaxis": [float(R[0, 0]), float(R[1, 0]), float(R[2, 0])],
+                    "yaxis": [float(R[0, 1]), float(R[1, 1]), float(R[2, 1])],
+                    "zaxis": [float(R[0, 2]), float(R[1, 2]), float(R[2, 2])],
                 },
                 "valid": True,
+                "solver": "roboticstoolbox",
             }
         except Exception as e:
             return {
-                "position": {"x": 0, "y": 0, "z": 0},
-                "orientation": {"xaxis": [1, 0, 0], "yaxis": [0, 1, 0], "zaxis": [0, 0, 1]},
                 "valid": False,
                 "error": str(e),
+                "solver": "roboticstoolbox",
             }
+        finally:
+            robot.tool = original_tool
 
     def inverse_kinematics(
         self, target_position: List[float], target_orientation: Optional[List[float]] = None,
@@ -273,40 +329,59 @@ class RobotService:
             end = total
             solve_wps = waypoints
 
-        # TCP offset: shift target so flange reaches the right position
-        tcp_z = tcp_offset[2] if tcp_offset and len(tcp_offset) >= 3 else 0.0
+        # TCP offset passed to solver — it sets robot.tool = SE3(...) per
+        # roboticstoolbox-python standard API (Peter Corke, "Robotics, Vision
+        # and Control", Springer 2023). The library's ikine_LM automatically
+        # accounts for robot.tool via the ETS chain.
 
         # ── Primary: roboticstoolbox-python DH solver ─────────────────────────
         if RTB_AVAILABLE and self._rtb_robot is not None:
-            return self._solve_rtb(solve_wps, tcp_z, initial_guess, start, total)
+            return self._solve_rtb(solve_wps, tcp_offset, initial_guess, start, total)
 
-        # ── Fallback: custom compas IK solver ─────────────────────────────────
+        # ── Fallback: compas IK solver ────────────────────────────────────────
         if self._ik_solver:
-            return self._solve_compas(solve_wps, tcp_z, initial_guess, start, total)
+            return self._solve_compas(solve_wps, tcp_offset, initial_guess, start, total)
 
         return {"trajectory": [], "error": "No IK solver available"}
 
     def _solve_rtb(
-        self, waypoints: list, tcp_z: float,
+        self, waypoints: list, tcp_offset: Optional[List[float]],
         initial_guess: Optional[list], chunk_start: int, total: int,
     ) -> Dict[str, Any]:
-        """Solve IK using roboticstoolbox-python (production-grade DH solver)."""
+        """Solve IK using roboticstoolbox-python (production-grade DH solver).
+
+        Uses robot.tool = SE3(...) to set the tool center point transform.
+        ikine_LM automatically accounts for robot.tool via the ETS chain.
+
+        Library: roboticstoolbox-python DHRobot.ikine_LM()
+        Reference: Peter Corke, "Robotics, Vision and Control", Springer 2023.
+        """
         t0 = time.perf_counter()
         robot = self._rtb_robot
 
-        # Initial seed: reasonable home pose for ABB IRB 6700
+        # Set tool transform ONCE before solving (standard roboticstoolbox API).
+        # robot.tool is post-multiplied in fkine() and baked into ETS for ikine_LM().
+        original_tool = robot.tool
+        if tcp_offset and len(tcp_offset) >= 3:
+            tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
+            robot.tool = SE3(tx, ty, tz)
+        else:
+            robot.tool = SE3()  # identity = no tool offset
+
+        # Initial seed: use configured home position for predictable behavior
         if initial_guess and len(initial_guess) >= 6:
             q_seed = np.array(initial_guess[:6])
         else:
-            q_seed = np.array([0.0, -0.5, 0.5, 0.0, -0.5, 0.0])
+            q_seed = np.array(self._get_home_position(6))
 
         trajectory = []
         reachability = []
         successes = 0
 
         for wp in waypoints:
-            # Build target: tool pointing straight down (-Z in robot frame)
-            target = SE3(wp[0], wp[1], wp[2] + tcp_z) * SE3.RPY(0, 180, 0, unit='deg')
+            # Target: TCP at waypoint position, tool pointing straight down (-Z).
+            # No manual offset — robot.tool handles TCP transform in ikine_LM.
+            target = SE3(wp[0], wp[1], wp[2]) * SE3.RPY(0, 180, 0, unit='deg')
 
             sol = robot.ikine_LM(target, q0=q_seed)
 
@@ -320,6 +395,9 @@ class RobotService:
                 # Use previous seed as fallback (maintains continuity)
                 trajectory.append(q_seed.tolist())
                 reachability.append(False)
+
+        # Restore original tool to avoid side effects on other calls
+        robot.tool = original_tool
 
         dt = time.perf_counter() - t0
         n = len(waypoints)
@@ -341,14 +419,26 @@ class RobotService:
         }
 
     def _solve_compas(
-        self, waypoints: list, tcp_z: float,
+        self, waypoints: list, tcp_offset: Optional[List[float]],
         initial_guess: Optional[list], chunk_start: int, total: int,
     ) -> Dict[str, Any]:
-        """Fallback IK using custom compas-based solver."""
+        """Fallback IK using compas-based solver.
+
+        Note: COMPAS IK solver does not support robot.tool transforms.
+        TCP offset is applied as a manual Z shift (limited to Z only).
+        """
         t0 = time.perf_counter()
 
+        # COMPAS IK has no robot.tool equivalent — apply Z offset manually
+        tcp_z = 0.0
+        if tcp_offset and len(tcp_offset) >= 3:
+            tcp_z = tcp_offset[2]
+            if tcp_offset[0] != 0 or tcp_offset[1] != 0:
+                print(f"[IK-Compas] Warning: COMPAS IK only supports Z TCP offset. "
+                      f"X={tcp_offset[0]}, Y={tcp_offset[1]} ignored.")
+
         if initial_guess is None:
-            initial_guess = [0.0, 0.0, 0.5, 0.0, -0.5, 0.0]
+            initial_guess = self._get_home_position(6)
         current_guess = initial_guess
 
         trajectory = []
@@ -425,18 +515,3 @@ class RobotService:
             "limits": limits,
         }
 
-    def _mock_fk(self, joint_values: List[float]) -> Dict[str, Any]:
-        """Simple mock FK for when real robot model isn't loaded."""
-        import math
-        # Very rough approximation of ABB IRB 6700 geometry
-        j1, j2 = joint_values[0] if joint_values else 0, joint_values[1] if len(joint_values) > 1 else 0
-        reach = 2.0  # meters
-        x = reach * math.cos(j1) * math.cos(j2)
-        y = reach * math.sin(j1) * math.cos(j2)
-        z = 0.78 + reach * math.sin(j2)
-        return {
-            "position": {"x": round(x, 4), "y": round(y, 4), "z": round(z, 4)},
-            "orientation": {"xaxis": [1, 0, 0], "yaxis": [0, 1, 0], "zaxis": [0, 0, 1]},
-            "valid": True,
-            "mock": True,
-        }

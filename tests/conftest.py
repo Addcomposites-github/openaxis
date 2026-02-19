@@ -21,6 +21,7 @@ def sample_config_dir(temp_dir):
     config_dir = temp_dir / "config"
     (config_dir / "robots").mkdir(parents=True)
     (config_dir / "processes").mkdir(parents=True)
+    (config_dir / "tools").mkdir(parents=True)
 
     # Create sample robot config
     robot_config = """
@@ -32,6 +33,7 @@ robot:
 kinematics:
   base_frame: "base_link"
   tool_frame: "tool0"
+  home_position: [0.0, -0.5, 0.5, 0.0, -0.5, 0.0]
 
 limits:
   joints:
@@ -56,6 +58,23 @@ slicing:
   bead_width: 6.0
 """
     (config_dir / "processes" / "test_waam.yaml").write_text(process_config)
+
+    # Create sample tool config
+    tool_config = """
+tool:
+  name: "Test Milling Tool"
+  type: "milling"
+  urdf_path: "urdf/tools/milling_tool.urdf"
+  tcp_offset: [0, 0, 0.15, 0, 0, 0]
+  mass: 2.0
+  description: "Test milling tool"
+
+properties:
+  diameter: 6.0
+  rotation_speed: 10000
+  number_of_teeth: 4
+"""
+    (config_dir / "tools" / "test_mill.yaml").write_text(tool_config)
 
     return config_dir
 

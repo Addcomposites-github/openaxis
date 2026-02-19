@@ -38,10 +38,16 @@ dependencies = [
     # Core COMPAS ecosystem
     "compas>=2.0",
     "compas_fab>=0.28",
-    
+    # compas_slicer removed — requires compas<2.0 (incompatible)
+    # Using ORNL Slicer 2 subprocess wrapper instead
+
     # Simulation
     "pybullet>=3.2",
-    
+    "pybullet-industrial>=1.0",
+
+    # Milling toolpath generation
+    "opencamlib>=2023.1",
+
     # Geometry processing
     "trimesh>=4.0",
     "numpy>=1.24",
@@ -152,6 +158,8 @@ module = [
     "compas.*",
     "compas_fab.*",
     "pybullet.*",
+    "pybullet_industrial.*",
+    "opencamlib.*",
     "trimesh.*",
     "RobotRaconteur.*",
 ]

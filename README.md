@@ -20,13 +20,15 @@ Democratize robotic hybrid manufacturing by providing:
 
 OpenAxis is built on proven open-source foundations:
 
-| Component | Technology |
-|-----------|------------|
-| Robotic Framework | [COMPAS](https://compas.dev/) (ETH Zurich) |
-| Slicing Engine | [ORNL Slicer 2](https://github.com/ORNLSlicer/Slicer-2) (Oak Ridge National Lab) |
-| Motion Planning | [MoveIt2](https://moveit.picknik.ai/) (ROS2) |
-| Simulation | [pybullet_industrial](https://github.com/WBK-Robotics/pybullet_industrial) (KIT) |
-| Hardware Abstraction | [Robot Raconteur](https://robotraconteur.github.io/) |
+| Component | Library | Status |
+|-----------|---------|--------|
+| Robotic Framework | [COMPAS](https://compas.dev/) + [compas_fab](https://gramaziokohler.github.io/compas_fab/) | Integrated |
+| Slicing | [compas_slicer](https://compas.dev/compas_slicer/) (ETH Zurich) | Integrating (replacing custom code) |
+| IK / Motion Planning | [compas_fab](https://gramaziokohler.github.io/compas_fab/) (PyBullet backend) | Integrating (replacing custom code) |
+| Simulation | [pybullet_industrial](https://github.com/WBK-Robotics/pybullet_industrial) (KIT) | Integrating |
+| Hardware Abstraction | [Robot Raconteur](https://robotraconteur.github.io/) | Phase 4 (not started) |
+| Production Motion | [MoveIt2](https://moveit.picknik.ai/) via ROS2 | Phase 2 (requires Docker) |
+| Production Slicing | [ORNL Slicer 2](https://github.com/ORNLSlicer/Slicer-2) | Phase 2 (C++ subprocess) |
 
 ## 🚀 Quick Start
 
@@ -125,12 +127,12 @@ pre-commit run --all-files
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| Phase 1 | ✅ Complete | Core framework + WAAM demo |
-| Phase 2 | ✅ Complete | Multi-process + external axes |
-| Phase 3 | ✅ Complete | Production UI + monitoring |
-| Phase 4 | 📋 Next | Industrial hardening |
+| Phase 1 | Rebuilding | Core framework — replacing custom code with library integrations |
+| Phase 2 | Not started | MoveIt2 + external axes + multi-process |
+| Phase 3 | ~50% | Desktop UI works, backend integration ongoing |
+| Phase 4 | Not started | Robot Raconteur hardware drivers |
 
-See [ROADMAP.md](docs/ROADMAP.md) for detailed milestones and [PHASE3_COMPLETE.md](docs/PHASE3_COMPLETE.md) for the latest completion status.
+See [ROADMAP.md](docs/ROADMAP.md) for detailed milestones and [INTEGRATION_STATUS.md](docs/INTEGRATION_STATUS.md) for what is actually integrated.
 
 ## 🤝 Contributing
 

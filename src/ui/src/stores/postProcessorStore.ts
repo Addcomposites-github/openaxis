@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { persist } from 'zustand/middleware';
+import { apiClient } from '../api/client';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,7 @@ interface PostProcessorState {
   } | null;
 
   // Actions
+  loadFormatsFromBackend: () => Promise<void>;
   setFormat: (format: ExportFormat) => void;
   setConfig: (updates: Partial<PostProcessorConfig>) => void;
   setHook: (hook: keyof EventHooks, value: string) => void;
@@ -122,6 +124,22 @@ export const usePostProcessorStore = create<PostProcessorState>()(
       config: { ...defaultConfig },
       availableFormats: defaultFormats,
       lastExportResult: null,
+
+      loadFormatsFromBackend: async () => {
+        try {
+          const res = await apiClient.get('/api/postprocessor/formats');
+          if (res.data?.status === 'success' && Array.isArray(res.data?.data)) {
+            const formats = res.data.data as FormatInfo[];
+            if (formats.length > 0) {
+              set((state) => {
+                state.availableFormats = formats;
+              });
+            }
+          }
+        } catch {
+          // Backend unavailable — keep default formats
+        }
+      },
 
       setFormat: (format) =>
         set((state) => {

@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<!--
+  Minimal extruder tool URDF for pybullet_industrial.
+  Represents a generic additive manufacturing extruder (WAAM, pellet, FDM).
+  Has base_link + tcp link connected by a fixed joint.
+  The tcp link is at the nozzle tip where material is deposited.
+-->
+<robot name="extruder_tool">
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.03" length="0.10" />
+      </geometry>
+      <material name="tool_blue">
+        <color rgba="0.2 0.4 0.8 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.05" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.03" length="0.10" />
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="1.0"/>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.0005"/>
+    </inertial>
+  </link>
+
+  <link name="tcp">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.005" />
+      </geometry>
+      <material name="nozzle_red">
+        <color rgba="1.0 0.2 0.2 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="base_to_tcp" type="fixed">
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="tcp"/>
+  </joint>
+</robot>
