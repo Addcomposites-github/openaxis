@@ -11,6 +11,7 @@ import {
   PROCESS_TYPES,
   type MaterialProfile,
 } from '../../stores/materialStore';
+import { useWorkspaceStore } from '../../stores/workspaceStore';
 
 export default function ProcessSetupSection() {
   const {
@@ -23,12 +24,28 @@ export default function ProcessSetupSection() {
     loadMaterials,
   } = useMaterialStore();
 
+  const updateCellSetup = useWorkspaceStore((s) => s.updateCellSetup);
+
   // Load materials on mount
   useEffect(() => {
     if (!isLoaded) {
       loadMaterials();
     }
   }, [isLoaded, loadMaterials]);
+
+  // Sync process type & material to workspaceStore.processConfig
+  useEffect(() => {
+    const material = selectedMaterialId
+      ? materials.find((m) => m.id === selectedMaterialId)
+      : null;
+    updateCellSetup({
+      processConfig: {
+        processType: selectedProcessType as any,
+        materialId: selectedMaterialId,
+        materialName: material?.name || '',
+      },
+    });
+  }, [selectedProcessType, selectedMaterialId, materials, updateCellSetup]);
 
   const processMatls = materials.filter(
     (m) => m.processType === selectedProcessType,

@@ -13,7 +13,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { useRobotStore } from '../../stores/robotStore';
-import { getRobotConfig, getJointLimits, computeFK, loadRobot } from '../../api/robot';
+import { getRobotConfig, getJointLimits, computeFK, loadRobot, solveTrajectoryIK } from '../../api/robot';
 import type { RobotConfig, JointLimits, FKResult } from '../../api/robot';
 import { createSimulation, getTrajectory } from '../../api/simulation';
 import { checkHealth } from '../../api/client';
@@ -63,6 +63,8 @@ export default function SimulationPanel() {
   const setReachability = useWorkspaceStore((s) => s.setReachability);
   const setIKStatus = useWorkspaceStore((s) => s.setIKStatus);
   const setTrajectory = useWorkspaceStore((s) => s.setTrajectory);
+  const setHomeJoints = useWorkspaceStore((s) => s.setHomeJoints);
+  const homeTransitTime = useWorkspaceStore((s) => s.homeTransitTime);
 
   // Backend state (local to this panel)
   const [backendConnected, setBackendConnected] = useState(false);
@@ -178,18 +180,13 @@ export default function SimulationPanel() {
     cellSetup.workTablePosition[2],
   ], [cellSetup.workTablePosition, cellSetup.workTableSize]);
 
-  // ── IK computation — analytical solver + backend upgrade ────────────────────
+  // ── IK computation — backend roboticstoolbox-python solver ──────────────────
   //
-  // Primary: Solve ALL waypoints with the frontend analytical IK solver.
-  //   Runs at ~10μs per point → 245K waypoints in ~2.5 seconds.
-  //   Produces smooth, per-waypoint joint angles using geometric closed-form IK.
+  // Primary: Backend IK via roboticstoolbox-python (Peter Corke).
+  //   Production-grade DH-based solver using Levenberg-Marquardt optimization.
+  //   Each solution seeds the next for smooth joint trajectories (~30-90μs/pt).
   //
-  // Future: When the backend roboticstoolbox-python solver is available,
-  //   it can replace the analytical solution in chunks for higher accuracy.
-  //   The analytical solution serves as the immediate preview.
-  //
-  // This approach is inspired by how RoboDK handles large toolpaths:
-  //   per-robot analytical IK solvers running in microseconds per point.
+  // Fallback: If backend is unavailable, use local stub (returns unreachable).
   //
 
   useEffect(() => {
@@ -201,7 +198,6 @@ export default function SimulationPanel() {
       setIKStatus('computing');
 
       // Transform all waypoints to robot base frame (meters, Z-up)
-      // Use actual robot base position from cell setup (not hardcoded origin)
       const robotPositionScene: [number, number, number] = [
         cellSetup.robot.basePosition[0],
         cellSetup.robot.basePosition[1],
@@ -210,9 +206,6 @@ export default function SimulationPanel() {
 
       // The toolpath is origin-centered (backend slices at origin).
       // Add the part's position offset before converting to robot frame.
-      // Store position is Y-up mm; slicer is Z-up mm.
-      // Y-up→Z-up: [x, y, z]_Yup → [x, -z, y]_Zup
-      // store.x → slicer_x, store.z → slicer_y (NEGATED), store.y → slicer_z
       const tpPart = toolpathPartId
         ? geometryParts.find(p => p.id === toolpathPartId)
         : geometryParts[0];
@@ -223,7 +216,6 @@ export default function SimulationPanel() {
       const positions: [number, number, number][] = trajectory.waypoints.map(
         (w) => {
           const wp = w.position as [number, number, number];
-          // Add part position offset (Z-up mm) to origin-centered slicer point
           const offsetWp: [number, number, number] = [
             wp[0] + partOffsetZUp[0],
             wp[1] + partOffsetZUp[1],
@@ -238,34 +230,79 @@ export default function SimulationPanel() {
       );
 
       const totalWps = positions.length;
-      // Tool length = magnitude of position offset [x, y, z] (first 3 elements).
-      // For ABB IRB 6700 with pellet extruder, offset is [0.5, 0, 0] meaning
-      // 0.5m along last joint axis (which points down when tool faces down).
       const eox = endEffectorOffset[0] || 0;
       const eoy = endEffectorOffset[1] || 0;
       const eoz = endEffectorOffset[2] || 0;
       const toolLength = Math.sqrt(eox * eox + eoy * eoy + eoz * eoz) || 0.15;
 
-      console.log(`[IK] Solving ${totalWps} waypoints with analytical IK (tool=${toolLength.toFixed(3)}m)...`);
       const t0 = performance.now();
 
+      // Try backend roboticstoolbox-python solver first
+      if (backendConnectedRef.current) {
+        try {
+          const tcpOffset = [eox, eoy, eoz, 0, 0, 0];
+          console.log(`[IK] Solving ${totalWps} waypoints via backend (roboticstoolbox-python, Levenberg-Marquardt)...`);
+          const result = await solveTrajectoryIK(positions, undefined, tcpOffset);
+          const dt = performance.now() - t0;
+
+          // Pad trajectory with home position at start and end
+          const home = cellSetup.robot.homePosition;
+          if (home && home.length === 6) {
+            const padded = [home, ...result.trajectory, home];
+            const paddedReach = [true, ...result.reachability, true];
+            setJointTrajectory(padded);
+            setReachability(paddedReach);
+            setHomeJoints(home);
+            // Extend total time to include home transit
+            const originalTime = trajectory?.totalTime || simState.totalTime;
+            setSimState({ totalTime: originalTime + 2 * homeTransitTime });
+          } else {
+            setJointTrajectory(result.trajectory);
+            setReachability(result.reachability);
+          }
+          setIKStatus('ready');
+          ikComputingRef.current = false;
+
+          console.log(
+            `[IK] Backend solved ${totalWps} waypoints in ${dt.toFixed(0)}ms: ` +
+            `${result.reachableCount}/${totalWps} reachable (${result.reachabilityPercent.toFixed(1)}%)`
+          );
+          return;
+        } catch (backendErr) {
+          console.error('[IK] Backend IK failed:', {
+            error: backendErr instanceof Error ? backendErr.message : String(backendErr),
+            waypoints: totalWps,
+            samplePosition: positions[0],
+            robotBase: robotPositionScene,
+          });
+        }
+      }
+
+      // Fallback: local stub (offline mode)
       try {
+        console.log(`[IK] Using local fallback IK for ${totalWps} waypoints (tool=${toolLength.toFixed(3)}m)...`);
         const result = solveTrajectoryIKLocal(positions, toolLength);
         const dt = performance.now() - t0;
 
-        setJointTrajectory(result.trajectory);
-        setReachability(result.reachability);
-        setIKStatus('ready');
+        if (result.reachableCount === 0) {
+          // Stub returned all-zeros — treat as failure, don't freeze the robot
+          console.warn('[IK] Fallback IK returned 0 reachable — backend unavailable. Robot arm will not move.');
+          setJointTrajectory(null);
+          setReachability(null);
+          setIKStatus('failed');
+        } else {
+          setJointTrajectory(result.trajectory);
+          setReachability(result.reachability);
+          setIKStatus('fallback');
+        }
         ikComputingRef.current = false;
 
         console.log(
-          `[IK] Solved ${totalWps} waypoints in ${dt.toFixed(0)}ms ` +
-          `(${(dt / totalWps * 1000).toFixed(1)}μs/pt): ` +
+          `[IK] Fallback: ${totalWps} waypoints in ${dt.toFixed(0)}ms: ` +
           `${result.reachableCount}/${totalWps} reachable (${result.reachabilityPercent.toFixed(1)}%)`
         );
-
       } catch (e) {
-        console.error('[IK] Analytical IK failed:', e);
+        console.error('[IK] All IK solvers failed:', e);
         setIKStatus('failed');
         ikComputingRef.current = false;
       }
@@ -299,14 +336,20 @@ export default function SimulationPanel() {
       if (fkTimerRef.current) clearTimeout(fkTimerRef.current);
       fkTimerRef.current = setTimeout(async () => {
         try {
-          const result = await computeFK(Object.values(angles));
+          // Pass TCP offset so fkine() returns TCP position (not just flange)
+          const tcpOff = [
+            endEffectorOffset[0] || 0,
+            endEffectorOffset[1] || 0,
+            endEffectorOffset[2] || 0,
+          ];
+          const result = await computeFK(Object.values(angles), tcpOff);
           setFkResult(result);
         } catch {
           // FK not available
         }
       }, 100);
     },
-    [backendConnected]
+    [backendConnected, endEffectorOffset]
   );
 
   useEffect(() => {
@@ -382,16 +425,29 @@ export default function SimulationPanel() {
           <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-600 text-white">Toolpath Mode</span>
         )}
         {ikStatus === 'computing' && (
-          <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-500 text-white animate-pulse">Computing IK...</span>
+          <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-500 text-white animate-pulse">
+            Computing IK{trajectory ? ` (${trajectory.waypoints.length} pts)` : ''}...
+          </span>
         )}
         {ikStatus === 'ready' && (
-          <span className="px-3 py-1 rounded-full text-xs font-medium bg-green-600 text-white">IK Ready</span>
+          <span className="px-3 py-1 rounded-full text-xs font-medium bg-green-600 text-white" title="roboticstoolbox-python (Levenberg-Marquardt)">
+            IK Ready — {reachabilityPct.toFixed(0)}% reachable
+          </span>
         )}
         {ikStatus === 'fallback' && (
-          <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-600 text-white">IK Approx.</span>
+          <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-600 text-white" title="Local fallback — backend unavailable">IK Offline</span>
         )}
         {ikStatus === 'failed' && (
-          <span className="px-3 py-1 rounded-full text-xs font-medium bg-red-500 text-white">IK Unavailable</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="px-3 py-1 rounded-full text-xs font-medium bg-red-500 text-white">IK Failed</span>
+            <button
+              onClick={() => setIKStatus('idle')}
+              className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+              title="Re-attempt IK computation"
+            >
+              Retry
+            </button>
+          </span>
         )}
         <span
           className={`px-3 py-1 rounded-full text-xs font-medium ${
@@ -439,9 +495,10 @@ export default function SimulationPanel() {
         <div className="space-y-3">
           <div className="border rounded-lg p-3 bg-gray-50 border-gray-200">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-gray-600">Collision Check</span>
-              <span className="px-2 py-1 bg-gray-400 text-white text-xs font-semibold rounded">N/A</span>
+              <span className="text-xs font-medium text-gray-600" title="Requires PyBullet physics backend">Collision Check</span>
+              <span className="px-2 py-1 bg-gray-400 text-white text-xs font-semibold rounded">Not Active</span>
             </div>
+            <p className="text-xs text-gray-400 mt-1">PyBullet physics not active</p>
           </div>
 
           <div className={`border rounded-lg p-3 ${jointLimitStatus.ok ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
@@ -559,7 +616,12 @@ export default function SimulationPanel() {
         <div>
           <h4 className="text-xs font-semibold text-gray-700 mb-3">
             TCP Position
-            {simMode === 'manual' && fkResult?.mock && <span className="text-yellow-600 ml-1">(estimated)</span>}
+            <span className="text-gray-400 ml-1 font-normal text-[10px]">(Robot Base Frame, mm)</span>
+            {simMode === 'manual' && fkResult?.solver && (
+              <span className="text-gray-400 ml-1 font-normal text-[10px]" title={`FK solver: ${fkResult.solver}`}>
+                [{fkResult.solver}]
+              </span>
+            )}
           </h4>
           <div className="space-y-2">
             {simMode === 'toolpath' && currentWp ? (
@@ -573,7 +635,7 @@ export default function SimulationPanel() {
                   </div>
                 ))}
               </>
-            ) : fkResult ? (
+            ) : fkResult?.valid ? (
               <>
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-gray-600">X</span>
@@ -588,6 +650,8 @@ export default function SimulationPanel() {
                   <span className="font-medium text-gray-900 font-mono">{(fkResult.position.z * 1000).toFixed(1)} mm</span>
                 </div>
               </>
+            ) : fkResult && !fkResult.valid ? (
+              <p className="text-xs text-red-500">FK error: {fkResult.error || 'Solver unavailable'}</p>
             ) : (
               <p className="text-xs text-gray-400">Start backend for live FK</p>
             )}

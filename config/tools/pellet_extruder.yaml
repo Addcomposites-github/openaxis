@@ -1,0 +1,19 @@
+# Pellet Extruder
+# Large-format pellet extruder for LFAM (Large Format Additive Manufacturing)
+
+tool:
+  name: "Pellet Extruder"
+  type: "extruder"
+  urdf_path: "urdf/tools/extruder.urdf"
+  tcp_offset: [0, 0, 0.20, 0, 0, 0]
+  mass: 8.0
+  description: "Pellet extruder for large format additive manufacturing (LFAM)"
+
+properties:
+  material_type: "polymer"
+  particle_size: 0.05
+  nozzle_diameter: 4.0  # mm
+  color: [0.8, 0.6, 0.2, 1.0]
+  max_temperature: 400  # Celsius
+  throughput: 10.0  # kg/hr
+  pellet_size: 3.0  # mm

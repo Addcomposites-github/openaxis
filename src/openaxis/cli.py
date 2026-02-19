@@ -190,8 +190,8 @@ def slice() -> None:
 @click.option("--process", "-p", help="Override process configuration")
 def slice_generate(project_path: Path, part_id: str, process: Optional[str]) -> None:
     """Generate toolpath for a part."""
-    console.print("[yellow]⚠[/yellow] Slicing not yet implemented (Phase 1)")
-    console.print("  This will generate toolpaths using ORNL Slicer 2")
+    console.print("[yellow]⚠[/yellow] Slicing integration in progress")
+    console.print("  Uses compas_slicer for planar slicing (pip install compas_slicer)")
 
 
 # =============================================================================

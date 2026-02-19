@@ -102,24 +102,14 @@ class ExternalAxesController:
         Returns:
             List of axis values, or None if not achievable
         """
-        import warnings
-        warnings.warn(
-            "compute_positioner_angles() is a STUB — returns [0.0] always. "
-            "External axis computation is not yet implemented.",
-            stacklevel=2,
-        )
-
         if not self.positioner:
             return None
 
-        # STUB: Single-axis turntable — returns 0 (home position) always.
-        if len(self.positioner.axes) == 1:
-            axis = self.positioner.axes[0]
-            if axis.axis_type == ExternalAxisType.ROTARY:
-                return [0.0]
-
-        # 2-axis positioner — NOT IMPLEMENTED
-        return None
+        raise NotImplementedError(
+            "External axis computation not yet implemented. "
+            "Requires compas_fab coordinated motion planning with external axes. "
+            "See: https://gramaziokohler.github.io/compas_fab/"
+        )
 
     def is_within_limits(self, axis_values: List[float]) -> bool:
         """
@@ -196,23 +186,14 @@ class ExternalAxesController:
         Returns:
             Optimal axis positions, or None if no solution
         """
-        import warnings
-        warnings.warn(
-            "optimize_axis_position() is a STUB — returns midpoint of range. "
-            "No reachability analysis is performed.",
-            stacklevel=2,
-        )
-
         if not self.positioner:
             return None
 
-        # STUB: Returns midpoint of each axis range
-        optimal_values = []
-        for axis in self.positioner.axes:
-            mid_value = (axis.min_limit + axis.max_limit) / 2
-            optimal_values.append(mid_value)
-
-        return optimal_values
+        raise NotImplementedError(
+            "External axis optimization not yet implemented. "
+            "Requires IK feasibility analysis across target frames for "
+            "candidate axis positions. Needs compas_fab IK backend first."
+        )
 
 
 def create_turntable(

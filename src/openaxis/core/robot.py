@@ -268,11 +268,7 @@ class KinematicsEngine:
         group: str | None = None,
     ) -> list[float] | None:
         """
-        Compute inverse kinematics (requires backend).
-
-        Note:
-            This is a placeholder. Full IK requires a motion planning backend
-            (e.g., MoveIt2 via ROS2). For now, we provide the interface.
+        Compute inverse kinematics using compas_fab PyBulletClient backend.
 
         Args:
             target_frame: Target pose as COMPAS Frame
@@ -283,14 +279,29 @@ class KinematicsEngine:
             Joint configuration achieving target pose, or None if not found
 
         Raises:
-            RobotError: If IK computation fails
-            NotImplementedError: If no backend is configured
+            RobotError: If IK computation fails or URDF path is not configured
         """
-        # TODO: Integrate with MoveIt2/ROS2 backend in Phase 2
-        raise NotImplementedError(
-            "Inverse kinematics requires motion planning backend (MoveIt2). "
-            "This will be implemented in Phase 2."
-        )
+        from openaxis.motion.kinematics import IKSolver
+
+        urdf_path = self.robot.config.urdf_path
+        if not urdf_path:
+            raise RobotError(
+                "Cannot compute IK: robot config has no urdf_path. "
+                "Set urdf_path in RobotConfig to enable IK solving."
+            )
+
+        try:
+            with IKSolver(
+                self.robot.model, urdf_path=urdf_path, tool_frame="link_6"
+            ) as solver:
+                config = solver.solve(
+                    target_frame, initial_guess=start_configuration
+                )
+                if config is not None:
+                    return list(config.joint_values)
+                return None
+        except Exception as e:
+            raise RobotError(f"Inverse kinematics failed: {e}") from e
 
     def check_collision(self, joint_values: list[float]) -> bool:
         """

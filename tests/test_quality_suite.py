@@ -18,6 +18,12 @@ from typing import Dict, List
 import json
 import time
 
+
+def _has_ornl_slicer() -> bool:
+    """Check if ORNL Slicer 2 binary is available."""
+    from openaxis.slicing.ornl_slicer import ORNLSlicer
+    return ORNLSlicer.is_available()
+
 # Import OpenAxis modules
 from openaxis.core.config import ConfigManager, RobotConfig, ProcessConfig
 from openaxis.core.project import Project, Part
@@ -355,10 +361,19 @@ class TestWorkflow2_ProjectManagement:
 
 
 class TestWorkflow3_Slicing:
-    """Test Workflow 3: Slicing and Toolpath Generation"""
+    """Test Workflow 3: Slicing and Toolpath Generation
 
+    NOTE: These tests require ORNL Slicer 2 binary to be installed.
+    PlanarSlicer delegates to ORNL Slicer 2 via subprocess wrapper.
+    Tests are skipped when ORNL Slicer 2 is not available.
+    """
+
+    @pytest.mark.skipif(
+        not _has_ornl_slicer(),
+        reason="ORNL Slicer 2 binary not found (install from https://github.com/ORNLSlicer/Slicer-2)"
+    )
     def test_planar_slicing(self, sample_stl, test_results):
-        """Slice a mesh into layers using PlanarSlicer"""
+        """Slice a mesh into layers using PlanarSlicer (requires ORNL Slicer 2)"""
         start = time.time()
         try:
             mesh = GeometryLoader.load(sample_stl)
@@ -380,8 +395,12 @@ class TestWorkflow3_Slicing:
             test_results.add_fail("test_planar_slicing", str(e))
             raise
 
+    @pytest.mark.skipif(
+        not _has_ornl_slicer(),
+        reason="ORNL Slicer 2 binary not found (install from https://github.com/ORNLSlicer/Slicer-2)"
+    )
     def test_toolpath_generation(self, sample_stl, test_results):
-        """Generate toolpath with segments from sliced mesh"""
+        """Generate toolpath with segments from sliced mesh (requires ORNL Slicer 2)"""
         start = time.time()
         try:
             mesh = GeometryLoader.load(sample_stl)
@@ -411,8 +430,12 @@ class TestWorkflow3_Slicing:
             test_results.add_fail("test_toolpath_generation", str(e))
             raise
 
+    @pytest.mark.skipif(
+        not _has_ornl_slicer(),
+        reason="ORNL Slicer 2 binary not found (install from https://github.com/ORNLSlicer/Slicer-2)"
+    )
     def test_gcode_generation(self, sample_stl, temp_workspace, test_results):
-        """Generate G-code from toolpath"""
+        """Generate G-code from toolpath (requires ORNL Slicer 2)"""
         start = time.time()
         try:
             mesh = GeometryLoader.load(sample_stl)
@@ -631,12 +654,35 @@ class TestWorkflow7_MotionPlanning:
     """Test Workflow 7: Motion Planning (Optional - requires MoveIt2)"""
 
     def test_inverse_kinematics(self, test_results):
-        """Test inverse kinematics solver"""
+        """Test inverse kinematics solver using compas_fab PyBulletClient"""
         start = time.time()
         try:
-            test_results.add_skip("test_inverse_kinematics",
-                                  "IK solver not fully implemented")
-            pytest.skip("IK solver not fully implemented")
+            from pathlib import Path as _Path
+            from compas.geometry import Frame, Point, Vector
+
+            urdf_path = str(
+                _Path(__file__).parent.parent
+                / "config" / "urdf" / "abb_irb6700.urdf"
+            )
+
+            if not _Path(urdf_path).exists():
+                test_results.add_skip("test_inverse_kinematics",
+                                      "ABB IRB6700 URDF not found")
+                pytest.skip("ABB IRB6700 URDF not found")
+
+            solver = IKSolver(robot=None, urdf_path=urdf_path, tool_frame="link_6")
+            try:
+                # Use a known reachable frame (FK of home position)
+                target = Frame(
+                    Point(1.757, 0.0, 1.488),
+                    Vector(0, -1, 0),
+                    Vector(1, 0, 0),
+                )
+                result = solver.solve(target)
+                assert result is not None, "IK should find a solution for a reachable pose"
+                test_results.add_pass("test_inverse_kinematics", time.time() - start)
+            finally:
+                solver.close()
         except Exception as e:
             test_results.add_fail("test_inverse_kinematics", str(e))
             raise
@@ -646,8 +692,8 @@ class TestWorkflow7_MotionPlanning:
         start = time.time()
         try:
             test_results.add_skip("test_cartesian_planning",
-                                  "Cartesian planner not fully implemented")
-            pytest.skip("Cartesian planner not fully implemented")
+                                  "Cartesian planner requires full trajectory optimization (Phase 2)")
+            pytest.skip("Cartesian planner requires full trajectory optimization (Phase 2)")
         except Exception as e:
             test_results.add_fail("test_cartesian_planning", str(e))
             raise
@@ -656,8 +702,12 @@ class TestWorkflow7_MotionPlanning:
 class TestWorkflow8_EndToEnd:
     """Test Workflow 8: Complete End-to-End Workflow"""
 
+    @pytest.mark.skipif(
+        not _has_ornl_slicer(),
+        reason="ORNL Slicer 2 binary not found (install from https://github.com/ORNLSlicer/Slicer-2)"
+    )
     def test_complete_workflow(self, temp_workspace, sample_stl, test_results):
-        """Execute complete workflow: Project → Geometry → Slice → G-code"""
+        """Execute complete workflow: Project → Geometry → Slice → G-code (requires ORNL Slicer 2)"""
         start = time.time()
         try:
             # 1. Create project

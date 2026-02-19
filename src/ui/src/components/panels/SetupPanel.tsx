@@ -17,12 +17,17 @@ export default function SetupPanel() {
   const cellSetup = useWorkspaceStore((s) => s.cellSetup);
   const setCellSetup = useWorkspaceStore((s) => s.setCellSetup);
   const setMode = useWorkspaceStore((s) => s.setMode);
+  const jointAngles = useWorkspaceStore((s) => s.jointAngles);
+  const setJointAngle = useWorkspaceStore((s) => s.setJointAngle);
+  const setJointAngles = useWorkspaceStore((s) => s.setJointAngles);
 
   const [activeTab, setActiveTab] = useState<'robot' | 'process' | 'endeffector' | 'external' | 'worktable'>('robot');
   const [backendConnected, setBackendConnected] = useState(false);
-  const [robotSpecs, setRobotSpecs] = useState<{ reach: number; payload: number; dof: number }>({
+  const [robotSpecs, setRobotSpecs] = useState<{ reach: number; payload: number; dof: number; homePosition?: number[] }>({
     reach: 2600, payload: 200, dof: 6,
   });
+
+  const updateCellSetup = useWorkspaceStore((s) => s.updateCellSetup);
 
   useEffect(() => {
     const init = async () => {
@@ -31,18 +36,29 @@ export default function SetupPanel() {
       if (health.ok) {
         try {
           const config = await getRobotConfig(cellSetup.robot.model);
+          const backendHome = (config as any).homePosition as number[] | undefined;
           setRobotSpecs({
             reach: config.maxReach || 2600,
             payload: config.maxPayload || 200,
             dof: config.dof || 6,
+            homePosition: backendHome,
           });
+          // Initialize home position from backend if user hasn't customized it
+          if (backendHome && backendHome.length === 6) {
+            const defaultHome = [0, -0.5, 0.5, 0, -0.5, 0];
+            const currentHome = cellSetup.robot.homePosition ?? defaultHome;
+            const isDefault = currentHome.every((v, i) => Math.abs(v - defaultHome[i]) < 0.01);
+            if (isDefault) {
+              updateCellSetup({ robot: { ...cellSetup.robot, homePosition: backendHome } });
+            }
+          }
         } catch (e) {
           console.warn('Failed to fetch robot config:', e);
         }
       }
     };
     init();
-  }, [cellSetup.robot.model]);
+  }, [cellSetup.robot.model]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateRobotPosition = (axis: 'x' | 'y' | 'z', value: number) => {
     const pos = [...cellSetup.robot.basePosition] as [number, number, number];
@@ -57,7 +73,8 @@ export default function SetupPanel() {
     setCellSetup({ ...cellSetup, robot: { ...cellSetup.robot, baseRotation: rot } });
   };
 
-  const updateExternalAxis = (type: ExternalAxisType) => {
+  // External axes are disabled (Phase 2 — requires compas_fab coordinated motion planning)
+  const _updateExternalAxis = (type: ExternalAxisType) => {
     const presets: Record<ExternalAxisType, { enabled: boolean; position: [number, number, number]; rotation: [number, number, number] }> = {
       turntable: { enabled: true, position: [2, 0, 0], rotation: [0, 0, 0] },
       positioner_2axis: { enabled: true, position: [1.5, 0, 0.5], rotation: [0, 0, 0] },
@@ -66,6 +83,7 @@ export default function SetupPanel() {
     };
     setCellSetup({ ...cellSetup, externalAxis: { type, ...presets[type] } });
   };
+  void _updateExternalAxis; // Suppress unused warning — will be re-enabled in Phase 2
 
   const saveCellSetup = () => {
     // Persist to robotStore for backward compat
@@ -207,7 +225,75 @@ export default function SetupPanel() {
                   <span>Axes:</span>
                   <span className="font-medium">{robotSpecs.dof}</span>
                 </div>
+                <div className="pt-1 border-t border-gray-200 mt-1">
+                  <span className="text-gray-500">Home Position (degrees):</span>
+                  <div className="grid grid-cols-3 gap-1.5 mt-1">
+                    {['J1', 'J2', 'J3', 'J4', 'J5', 'J6'].map((label, i) => {
+                      const homePos = cellSetup.robot.homePosition ?? [0, -0.5, 0.5, 0, -0.5, 0];
+                      return (
+                        <div key={label} className="flex flex-col">
+                          <label className="text-xs text-gray-400 mb-0.5">{label}</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={Number(((homePos[i] ?? 0) * 180 / Math.PI).toFixed(1))}
+                            onChange={(e) => {
+                              const newHome = [...homePos];
+                              newHome[i] = parseFloat(e.target.value || '0') * Math.PI / 180;
+                              updateCellSetup({ robot: { ...cellSetup.robot, homePosition: newHome } });
+                            }}
+                            className="w-full px-1.5 py-1 text-xs font-mono border border-gray-200 rounded focus:border-blue-400 focus:ring-1 focus:ring-blue-200 outline-none"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
+              <p className="text-xs text-gray-400 mt-2 font-mono">
+                Robot Model: COMPAS / URDF
+              </p>
+            </div>
+
+            {/* Joint Jog — preview robot pose in 3D view */}
+            <div>
+              <h4 className="text-sm font-semibold text-gray-900 mb-3">Joint Jog (preview pose)</h4>
+              <div className="space-y-2">
+                {['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6'].map((name, i) => {
+                  const value = jointAngles[name] || 0;
+                  const deg = value * 180 / Math.PI;
+                  return (
+                    <div key={name}>
+                      <div className="flex justify-between items-center text-xs mb-0.5">
+                        <span className="text-gray-600">J{i + 1}</span>
+                        <span className="font-mono text-gray-900">{deg.toFixed(1)}°</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-Math.PI}
+                        max={Math.PI}
+                        step="0.01"
+                        value={value}
+                        onChange={(e) => setJointAngle(name, parseFloat(e.target.value))}
+                        className="w-full h-1"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                onClick={() => {
+                  // Reset to home position
+                  const home = cellSetup.robot.homePosition ?? [0, -0.5, 0.5, 0, -0.5, 0];
+                  const names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6'];
+                  const angles: Record<string, number> = {};
+                  names.forEach((n, i) => { angles[n] = home[i] ?? 0; });
+                  setJointAngles(angles);
+                }}
+                className="mt-2 w-full py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Go to Home Position
+              </button>
             </div>
           </>
         )}
@@ -222,7 +308,15 @@ export default function SetupPanel() {
 
         {activeTab === 'external' && (
           <>
-            <div>
+            <div className="bg-amber-50 border border-amber-300 p-4 rounded-lg mb-4">
+              <p className="text-sm font-semibold text-amber-800 mb-1">Phase 2 — Coming Soon</p>
+              <p className="text-xs text-amber-700">
+                External axes coordination requires compas_fab coordinated motion planning.
+                This feature is planned for Phase 2 of the OpenAxis roadmap.
+              </p>
+            </div>
+
+            <div className="opacity-50 pointer-events-none">
               <h4 className="text-sm font-semibold text-gray-900 mb-3">External Axis Type</h4>
               <div className="space-y-2">
                 {[
@@ -233,11 +327,11 @@ export default function SetupPanel() {
                 ].map((option) => (
                   <button
                     key={option.value}
-                    onClick={() => updateExternalAxis(option.value as ExternalAxisType)}
-                    className={`w-full text-left px-4 py-3 border-2 rounded-lg transition-colors ${
+                    disabled
+                    className={`w-full text-left px-4 py-3 border-2 rounded-lg cursor-not-allowed ${
                       cellSetup.externalAxis.type === option.value
                         ? 'border-blue-600 bg-blue-50'
-                        : 'border-gray-200 hover:border-gray-300'
+                        : 'border-gray-200'
                     }`}
                   >
                     <div className="font-medium text-sm">{option.label}</div>
@@ -246,15 +340,6 @@ export default function SetupPanel() {
                 ))}
               </div>
             </div>
-
-            {cellSetup.externalAxis.enabled && (
-              <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg">
-                <p className="text-xs text-yellow-800">
-                  <strong>Note:</strong> External axes coordination will be available in a future phase.
-                  For now, this is visual placement only.
-                </p>
-              </div>
-            )}
           </>
         )}
 
@@ -271,9 +356,9 @@ export default function SetupPanel() {
         >
           Save Cell Setup & Continue
         </button>
-        <button className="w-full px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm">
-          Load Preset Configuration
-        </button>
+        <p className="text-xs text-gray-400 text-center font-mono">
+          Robot Model: COMPAS / URDF
+        </p>
       </div>
     </div>
   );

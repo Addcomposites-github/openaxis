@@ -8,7 +8,9 @@
  * - End effector type selection (preserved from original)
  */
 
+import { useState, useEffect } from 'react';
 import { useWorkspaceStore, type CellSetup } from '../../stores/workspaceStore';
+import { getTools, type ToolInfo } from '../../api/robot';
 
 type EndEffectorType = CellSetup['endEffector']['type'];
 
@@ -25,8 +27,31 @@ const TOOL_CONVENTIONS = [
 export default function TCPSetupPanel() {
   const cellSetup = useWorkspaceStore((s) => s.cellSetup);
   const setCellSetup = useWorkspaceStore((s) => s.setCellSetup);
+  const [backendTools, setBackendTools] = useState<ToolInfo[]>([]);
 
   const ee = cellSetup.endEffector;
+
+  // Fetch tools from backend config/tools/*.yaml
+  useEffect(() => {
+    getTools().then((tools) => {
+      if (tools.length > 0) setBackendTools(tools);
+    });
+  }, []);
+
+  // Apply a backend tool's TCP offset and mass
+  const applyBackendTool = (tool: ToolInfo) => {
+    const offset: [number, number, number, number, number, number] = [
+      tool.tcpOffset[0] ?? 0, tool.tcpOffset[1] ?? 0, tool.tcpOffset[2] ?? 0,
+      tool.tcpOffset[3] ?? 0, tool.tcpOffset[4] ?? 0, tool.tcpOffset[5] ?? 0,
+    ];
+    const typeMap: Record<string, EndEffectorType> = {
+      extruder: 'waam_torch',
+      milling: 'spindle',
+      remover: 'spindle',
+    };
+    const eeType = typeMap[tool.type] || 'waam_torch';
+    setCellSetup({ ...cellSetup, endEffector: { ...ee, type: eeType, offset, mass: tool.mass, convention: 'Z+' } });
+  };
 
   // End effector presets
   const updateEndEffector = (type: EndEffectorType) => {
@@ -81,15 +106,41 @@ export default function TCPSetupPanel() {
         </div>
       </div>
 
+      {/* Backend Tool Presets (from config/tools/*.yaml) */}
+      {backendTools.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-gray-900 mb-1">Tool Library</h4>
+          <p className="text-xs text-gray-400 mb-2 font-mono">config/tools/*.yaml</p>
+          <div className="space-y-1">
+            {backendTools.map((tool) => (
+              <button
+                key={tool.id}
+                onClick={() => applyBackendTool(tool)}
+                className="w-full text-left px-3 py-2 border border-gray-200 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-colors"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-gray-800">{tool.name}</span>
+                  <span className="text-xs text-gray-400">{tool.type}</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">{tool.description}</div>
+                <div className="text-xs text-gray-400 font-mono mt-0.5">
+                  TCP: [{tool.tcpOffset.slice(0, 3).map((v: number) => v.toFixed(3)).join(', ')}] | {tool.mass} kg
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {ee.type !== 'none' && (
         <>
           {/* TCP Position (6DOF) */}
           <div>
             <h4 className="text-sm font-semibold text-gray-900 mb-1">
-              TCP Position
+              TCP Position <span className="text-gray-400 font-normal text-xs">(Flange Frame, m)</span>
             </h4>
             <p className="text-xs text-gray-500 mb-3">
-              Tool Center Point position relative to robot flange (meters).
+              Tool Center Point offset from robot flange in the flange coordinate frame.
             </p>
             <div className="grid grid-cols-3 gap-2">
               {['X', 'Y', 'Z'].map((axis, i) => (
@@ -115,10 +166,10 @@ export default function TCPSetupPanel() {
           {/* TCP Orientation */}
           <div>
             <h4 className="text-sm font-semibold text-gray-900 mb-1">
-              TCP Orientation
+              TCP Orientation <span className="text-gray-400 font-normal text-xs">(Flange Frame, deg)</span>
             </h4>
             <p className="text-xs text-gray-500 mb-3">
-              Tool frame rotation in Euler angles (degrees).
+              Tool frame rotation relative to flange frame in Euler angles.
             </p>
             <div className="grid grid-cols-3 gap-2">
               {['RX', 'RY', 'RZ'].map((axis, i) => (

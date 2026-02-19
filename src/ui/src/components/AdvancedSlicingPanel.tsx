@@ -66,18 +66,8 @@ const INFILL_PATTERNS = [
   { value: 'medial', label: 'Medial', desc: 'Medial axis guided paths' },
 ];
 
-const SEAM_MODES = [
-  { value: 'guided', label: 'Guided', desc: 'All layers start at specified angle' },
-  { value: 'distributed', label: 'Distributed', desc: 'Evenly spaced around perimeter' },
-  { value: 'random', label: 'Random', desc: 'Random start point per layer' },
-];
-
-const SEAM_SHAPES = [
-  { value: 'straight', label: 'Straight' },
-  { value: 'zigzag', label: 'Zigzag' },
-  { value: 'triangular', label: 'Triangular' },
-  { value: 'sine', label: 'Sine Wave' },
-];
+// Seam control removed — not implemented in backend slicer
+// (Seam modes were FDM concepts, not relevant to WAAM/welding processes)
 
 export const defaultSlicingParams: SlicingParams = {
   layerHeight: 0.3,
@@ -269,63 +259,7 @@ export default function AdvancedSlicingPanel({
         </div>
       </Section>
 
-      {/* Seam Control */}
-      <Section title="Seam Control">
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Placement Mode</label>
-          <div className="grid grid-cols-3 gap-1.5">
-            {SEAM_MODES.map((m) => (
-              <button
-                key={m.value}
-                onClick={() => update({ seamMode: m.value })}
-                className={`px-2 py-1.5 text-xs rounded-md border transition-colors ${
-                  params.seamMode === m.value
-                    ? 'border-blue-500 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {params.seamMode === 'guided' && (
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">Seam Angle (°)</label>
-            <input
-              type="number"
-              step="15"
-              min="0"
-              max="360"
-              value={params.seamAngle}
-              onChange={(e) => update({ seamAngle: parseFloat(e.target.value) || 0 })}
-              className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono"
-            />
-          </div>
-        )}
-
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Seam Shape</label>
-          <div className="grid grid-cols-4 gap-1.5">
-            {SEAM_SHAPES.map((s) => (
-              <button
-                key={s.value}
-                onClick={() => update({ seamShape: s.value })}
-                className={`px-2 py-1.5 text-xs rounded-md border transition-colors ${
-                  params.seamShape === s.value
-                    ? 'border-blue-500 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                }`}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </Section>
-
-      {/* Movement Settings */}
+      {/* Movement Settings — only travel speed (z-hop/retraction are FDM concepts, not relevant to WAAM) */}
       <Section title="Movement">
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -337,48 +271,6 @@ export default function AdvancedSlicingPanel({
                 min="100"
                 value={params.travelSpeed}
                 onChange={(e) => update({ travelSpeed: parseFloat(e.target.value) || 5000 })}
-                className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono"
-              />
-              <span className="text-xs text-gray-400 whitespace-nowrap">mm/m</span>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">Z-Hop</label>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                value={params.zHop}
-                onChange={(e) => update({ zHop: parseFloat(e.target.value) || 0 })}
-                className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono"
-              />
-              <span className="text-xs text-gray-400">mm</span>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">Retract Dist.</label>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                step="0.5"
-                min="0"
-                value={params.retractDistance}
-                onChange={(e) => update({ retractDistance: parseFloat(e.target.value) || 0 })}
-                className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono"
-              />
-              <span className="text-xs text-gray-400">mm</span>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-0.5">Retract Speed</label>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                step="100"
-                min="100"
-                value={params.retractSpeed}
-                onChange={(e) => update({ retractSpeed: parseFloat(e.target.value) || 2400 })}
                 className="w-full px-2 py-1 text-xs border border-gray-300 rounded font-mono"
               />
               <span className="text-xs text-gray-400 whitespace-nowrap">mm/m</span>

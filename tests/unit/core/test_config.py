@@ -4,7 +4,7 @@ Unit tests for configuration management.
 
 import pytest
 
-from openaxis.core.config import ConfigManager, ProcessConfig, RobotConfig
+from openaxis.core.config import ConfigManager, ProcessConfig, RobotConfig, ToolConfig
 from openaxis.core.exceptions import ConfigurationError
 
 
@@ -32,6 +32,20 @@ class TestRobotConfig:
         )
         assert config.name == "ABB IRB6700"
         assert config.joint_limits["j1"]["lower"] == -180
+
+    def test_home_position_default_empty(self):
+        """Test home_position defaults to empty list."""
+        config = RobotConfig(name="Test", manufacturer="Mfg")
+        assert config.home_position == []
+
+    def test_home_position_set(self):
+        """Test home_position can be set."""
+        home = [0.0, -0.5, 0.5, 0.0, -0.5, 0.0]
+        config = RobotConfig(
+            name="Test", manufacturer="Mfg", home_position=home
+        )
+        assert config.home_position == home
+        assert len(config.home_position) == 6
 
 
 class TestProcessConfig:
@@ -116,3 +130,70 @@ class TestConfigManager:
 
         with pytest.raises(ConfigurationError):
             manager.get_process("nonexistent")
+
+    def test_home_position_loaded_from_yaml(self, sample_config_dir):
+        """Test home_position is loaded from robot YAML config."""
+        manager = ConfigManager(sample_config_dir)
+        robot = manager.get_robot("test_robot")
+        assert robot.home_position == [0.0, -0.5, 0.5, 0.0, -0.5, 0.0]
+
+    def test_load_tools(self, sample_config_dir):
+        """Test loading tool configurations."""
+        manager = ConfigManager(sample_config_dir)
+        manager.load()
+        tools = manager.list_tools()
+        assert "test_mill" in tools
+
+    def test_get_tool(self, sample_config_dir):
+        """Test getting a specific tool configuration."""
+        manager = ConfigManager(sample_config_dir)
+        tool = manager.get_tool("test_mill")
+        assert tool.name == "Test Milling Tool"
+        assert tool.type == "milling"
+        assert tool.mass == 2.0
+        assert tool.properties["diameter"] == 6.0
+        assert tool.properties["rotation_speed"] == 10000
+
+    def test_get_tool_not_found(self, sample_config_dir):
+        """Test getting a non-existent tool."""
+        manager = ConfigManager(sample_config_dir)
+        with pytest.raises(ConfigurationError) as exc_info:
+            manager.get_tool("nonexistent")
+        assert "available" in exc_info.value.details
+
+
+class TestToolConfig:
+    """Tests for ToolConfig model."""
+
+    def test_create_minimal(self):
+        """Test creating tool config with minimal fields."""
+        config = ToolConfig(name="Test Tool", type="milling")
+        assert config.name == "Test Tool"
+        assert config.type == "milling"
+        assert config.mass == 1.0
+        assert config.tcp_offset == [0, 0, 0, 0, 0, 0]
+        assert config.properties == {}
+
+    def test_create_full(self):
+        """Test creating tool config with all fields."""
+        config = ToolConfig(
+            name="WAAM Torch",
+            type="extruder",
+            urdf_path="urdf/tools/extruder.urdf",
+            tcp_offset=[0, 0, 0.15, 0, 0, 0],
+            mass=5.0,
+            description="Wire arc torch",
+            properties={"material_type": "steel", "wire_diameter": 1.2},
+        )
+        assert config.name == "WAAM Torch"
+        assert config.type == "extruder"
+        assert config.urdf_path == "urdf/tools/extruder.urdf"
+        assert config.tcp_offset[2] == 0.15
+        assert config.mass == 5.0
+        assert config.properties["wire_diameter"] == 1.2
+
+    def test_default_tcp_offset(self):
+        """Test tcp_offset defaults to all zeros."""
+        config = ToolConfig(name="T", type="milling")
+        assert config.tcp_offset == [0, 0, 0, 0, 0, 0]
+        assert len(config.tcp_offset) == 6

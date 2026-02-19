@@ -169,7 +169,7 @@ function WorkFrameCard({
           {/* Position (mm) */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
-              Position (mm)
+              Position <span className="text-gray-400 font-normal">(World Frame, mm)</span>
             </label>
             <div className="grid grid-cols-3 gap-2">
               {['X', 'Y', 'Z'].map((axis, i) => (
@@ -194,7 +194,7 @@ function WorkFrameCard({
           {/* Rotation (degrees) */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
-              Rotation (degrees)
+              Rotation <span className="text-gray-400 font-normal">(World Frame, deg)</span>
             </label>
             <div className="grid grid-cols-3 gap-2">
               {['RX', 'RY', 'RZ'].map((axis, i) => (

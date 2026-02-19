@@ -170,11 +170,17 @@ export default function Monitoring() {
           ) : (
             <SignalSlashIcon className="w-4 h-4" />
           )}
-          <span>{backendConnected ? 'Live Data from Backend' : 'Offline — Simulated Data'}</span>
+          <span>{backendConnected ? 'Connected to Backend' : 'Offline — Simulated Data'}</span>
         </div>
       </div>
 
-      {/* System Status Cards */}
+      {/* System Status Cards — Real metrics from psutil when backend connected */}
+      <div className="flex items-center gap-2 mb-1">
+        <h3 className="text-sm font-semibold text-gray-700">System Metrics</h3>
+        <span className="text-xs text-gray-400 font-mono">
+          {backendConnected ? '(psutil — live)' : '(simulated)'}
+        </span>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-2">
@@ -254,7 +260,14 @@ export default function Monitoring() {
         </div>
       </div>
 
-      {/* Charts */}
+      {/* Sensor Charts — Simulated data (real sensor integration requires Robot Raconteur) */}
+      <div className="flex items-center gap-2 mb-1">
+        <h3 className="text-sm font-semibold text-gray-700">Sensor Preview</h3>
+        <span className="text-xs text-gray-400 font-mono">(simulated)</span>
+      </div>
+      <p className="text-xs text-gray-400 mb-2">
+        Real sensor integration requires Robot Raconteur hardware abstraction (Phase 4)
+      </p>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Temperature Chart */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">

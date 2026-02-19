@@ -1,0 +1,18 @@
+# WAAM (Wire Arc Additive Manufacturing) Torch
+# Standard welding torch for wire-based metal deposition
+
+tool:
+  name: "WAAM Torch"
+  type: "extruder"
+  urdf_path: "urdf/tools/extruder.urdf"
+  tcp_offset: [0, 0, 0.15, 0, 0, 0]  # x, y, z, rx, ry, rz
+  mass: 5.0
+  description: "Wire Arc Additive Manufacturing torch for metal deposition"
+
+properties:
+  material_type: "steel"
+  particle_size: 0.03
+  wire_diameter: 1.2  # mm
+  color: [0.2, 0.4, 0.8, 1.0]
+  deposition_rate: 5.0  # kg/hr
+  shielding_gas: "Ar/CO2"

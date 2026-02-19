@@ -24,12 +24,13 @@ const STRATEGIES: {
   value: SlicingStrategy;
   label: string;
   desc: string;
+  available: boolean;
 }[] = [
-  { value: 'planar', label: 'Planar', desc: 'Horizontal layer-by-layer slicing' },
-  { value: 'angled', label: 'Angled', desc: 'Tilted slice planes at custom angle' },
-  { value: 'radial', label: 'Radial', desc: 'Concentric cylindrical toolpaths' },
-  { value: 'curve', label: 'Curve', desc: 'Layers follow a guide curve' },
-  { value: 'revolved', label: 'Revolved', desc: 'Helical paths for rotational parts' },
+  { value: 'planar', label: 'Planar', desc: 'Horizontal layer-by-layer slicing (ORNL Slicer 2)', available: true },
+  { value: 'angled', label: 'Angled', desc: 'Coming soon \u2014 requires compas_slicer integration', available: false },
+  { value: 'radial', label: 'Radial', desc: 'Coming soon \u2014 requires compas_slicer integration', available: false },
+  { value: 'curve', label: 'Curve', desc: 'Coming soon \u2014 requires compas_slicer integration', available: false },
+  { value: 'revolved', label: 'Revolved', desc: 'Coming soon \u2014 requires compas_slicer integration', available: false },
 ];
 
 // ─── Strategy Preview Canvas ─────────────────────────────────────────────────
@@ -170,20 +171,23 @@ export default function SlicingStrategySelector({
         {STRATEGIES.map((s) => (
           <button
             key={s.value}
-            onClick={() => onChange(s.value)}
+            onClick={() => s.available && onChange(s.value)}
+            disabled={!s.available}
             className={`flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition-colors ${
-              strategy === s.value
-                ? 'border-blue-500 bg-blue-50'
-                : 'border-gray-200 hover:border-gray-300'
+              !s.available
+                ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                : strategy === s.value
+                  ? 'border-blue-500 bg-blue-50'
+                  : 'border-gray-200 hover:border-gray-300'
             }`}
             title={s.desc}
           >
             <StrategyPreview
               strategy={s.value}
               size={40}
-              active={strategy === s.value}
+              active={strategy === s.value && s.available}
             />
-            <span className="text-xs text-gray-700 leading-tight text-center font-medium">
+            <span className={`text-xs leading-tight text-center font-medium ${s.available ? 'text-gray-700' : 'text-gray-400'}`}>
               {s.label}
             </span>
           </button>

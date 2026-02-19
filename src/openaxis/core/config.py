@@ -23,6 +23,7 @@ class RobotConfig(BaseModel):
     urdf_path: str | None = None
     base_frame: str = "base_link"
     tool_frame: str = "tool0"
+    home_position: list[float] = Field(default_factory=list)
     joint_limits: dict[str, dict[str, float]] = Field(default_factory=dict)
     communication: dict[str, Any] = Field(default_factory=dict)
 
@@ -35,6 +36,35 @@ class ProcessConfig(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     slicing: dict[str, Any] = Field(default_factory=dict)
     equipment: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolConfig(BaseModel):
+    """Manufacturing tool configuration model.
+
+    Represents a tool in the tool library (extruder, milling tool, etc.).
+    Follows the same config pattern as robots and processes.
+
+    Example YAML::
+
+        tool:
+          name: "WAAM Torch"
+          type: "extruder"
+          urdf_path: "urdf/tools/extruder.urdf"
+          tcp_offset: [0, 0, 0.15, 0, 0, 0]
+          mass: 5.0
+          description: "Wire Arc Additive Manufacturing torch"
+        properties:
+          particle_size: 0.03
+          material_type: "steel"
+    """
+
+    name: str
+    type: str  # 'extruder', 'milling', 'remover'
+    urdf_path: str | None = None
+    tcp_offset: list[float] = Field(default_factory=lambda: [0, 0, 0, 0, 0, 0])
+    mass: float = 1.0
+    description: str = ""
+    properties: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass
@@ -54,6 +84,7 @@ class ConfigManager:
     config_dir: Path
     _robots: dict[str, RobotConfig] = field(default_factory=dict, init=False)
     _processes: dict[str, ProcessConfig] = field(default_factory=dict, init=False)
+    _tools: dict[str, ToolConfig] = field(default_factory=dict, init=False)
     _loaded: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
@@ -68,6 +99,7 @@ class ConfigManager:
         """Load all configurations from disk."""
         self._load_robots()
         self._load_processes()
+        self._load_tools()
         self._loaded = True
 
     def _load_robots(self) -> None:
@@ -124,6 +156,30 @@ class ConfigManager:
             except (yaml.YAMLError, ValidationError) as e:
                 raise ConfigurationError(
                     f"Failed to load process config: {config_file}",
+                    details={"error": str(e)},
+                )
+
+    def _load_tools(self) -> None:
+        """Load tool configurations."""
+        tools_dir = self.config_dir / "tools"
+        if not tools_dir.exists():
+            return
+
+        for config_file in tools_dir.glob("*.yaml"):
+            try:
+                with open(config_file) as f:
+                    data = yaml.safe_load(f)
+
+                if data and "tool" in data:
+                    tool_data = data["tool"]
+                    if "properties" in data:
+                        tool_data["properties"] = data["properties"]
+
+                    tool = ToolConfig(**tool_data)
+                    self._tools[config_file.stem] = tool
+            except (yaml.YAMLError, ValidationError) as e:
+                raise ConfigurationError(
+                    f"Failed to load tool config: {config_file}",
                     details={"error": str(e)},
                 )
 
@@ -186,3 +242,33 @@ class ConfigManager:
         if not self._loaded:
             self.load()
         return list(self._processes.keys())
+
+    def get_tool(self, name: str) -> ToolConfig:
+        """
+        Get tool configuration by name.
+
+        Args:
+            name: Tool configuration name (without .yaml extension)
+
+        Returns:
+            ToolConfig instance
+
+        Raises:
+            ConfigurationError: If tool not found
+        """
+        if not self._loaded:
+            self.load()
+
+        if name not in self._tools:
+            available = list(self._tools.keys())
+            raise ConfigurationError(
+                f"Tool configuration not found: {name}",
+                details={"available": available},
+            )
+        return self._tools[name]
+
+    def list_tools(self) -> list[str]:
+        """List available tool configurations."""
+        if not self._loaded:
+            self.load()
+        return list(self._tools.keys())
