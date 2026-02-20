@@ -33,6 +33,7 @@ export interface IKResult {
   jointNames?: string[];
   valid: boolean;
   error?: string;
+  solver?: string;
 }
 
 export interface TrajectoryIKResult {
@@ -175,7 +176,10 @@ export async function computeFK(jointValues: number[], tcpOffset?: number[]): Pr
 }
 
 /**
- * Compute inverse kinematics
+ * Compute inverse kinematics for a single target pose.
+ * targetPosition: [x, y, z] in meters, robot base frame (Z-up, ABB convention)
+ * targetOrientation: optional [rx, ry, rz] in DEGREES (RPY Euler angles)
+ *   Omit to use default tool-down posture (RPY = [0, 180, 0] deg).
  */
 export async function computeIK(
   targetPosition: [number, number, number],

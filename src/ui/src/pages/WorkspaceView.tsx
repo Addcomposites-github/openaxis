@@ -4,7 +4,7 @@
  * Holds ONE Canvas (never unmounts), mode tabs, and a context panel that
  * switches content based on the active mode.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Canvas } from '@react-three/fiber';
 import {
@@ -42,6 +42,10 @@ export default function WorkspaceView() {
     }
   }, [searchParams, setMode]);
 
+  // Coordinate frame visibility toggles
+  const [showWorldAxes, setShowWorldAxes] = useState(false);
+  const [showRobotBaseAxes, setShowRobotBaseAxes] = useState(false);
+
   // Single camera position for all modes (everything is in meters now)
   // 4m out, 3m up — frames robot cell nicely at meter scale
   const cameraPosition: [number, number, number] = [4, 3, 4];
@@ -77,8 +81,58 @@ export default function WorkspaceView() {
         {/* 3D Canvas — NEVER unmounts */}
         <div className="flex-1 bg-gray-900 relative">
           <Canvas camera={{ position: cameraPosition, fov: 50 }} shadows>
-            <SceneManager />
+            <SceneManager showWorldAxes={showWorldAxes} showRobotBaseAxes={showRobotBaseAxes} />
           </Canvas>
+
+          {/* Coordinate Frame Toggles — bottom-left of canvas */}
+          <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-md px-3 py-2 text-xs text-gray-700 space-y-1.5 select-none" style={{ maxWidth: 210 }}>
+            <p className="font-semibold text-gray-500 uppercase tracking-wide text-[10px] mb-1">Coord Frames</p>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showWorldAxes}
+                onChange={(e) => setShowWorldAxes(e.target.checked)}
+                className="w-3.5 h-3.5 accent-blue-600"
+              />
+              <span className="font-medium">World</span>
+              <span className="text-gray-400">(scene, Y-up)</span>
+            </label>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showRobotBaseAxes}
+                onChange={(e) => setShowRobotBaseAxes(e.target.checked)}
+                className="w-3.5 h-3.5 accent-blue-600"
+              />
+              <span className="font-medium">Robot Base</span>
+              <span className="text-gray-400">(IK frame, Z-up)</span>
+            </label>
+
+            {/* Legend — separate rows per frame so there is no ambiguity */}
+            <div className="pt-1 border-t border-gray-200 space-y-1.5">
+              <div>
+                <p className="text-[9px] text-gray-500 font-semibold mb-0.5">World (scene)</p>
+                <p className="text-[9px] text-gray-500 leading-tight">
+                  <span className="text-red-500 font-bold">X</span> right&ensp;
+                  <span className="text-green-500 font-bold">Y</span> up&ensp;
+                  <span className="text-blue-500 font-bold">Z</span> toward you
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] text-gray-500 font-semibold mb-0.5">Robot Base (IK frame)</p>
+                <p className="text-[9px] text-gray-500 leading-tight">
+                  <span className="text-red-500 font-bold">X</span> forward&ensp;
+                  <span className="text-green-500 font-bold">Y</span> left&ensp;
+                  <span className="text-blue-500 font-bold">Z</span> up
+                </p>
+                <p className="text-[9px] text-gray-400 leading-tight mt-0.5">
+                  TCP move inputs use this frame.
+                </p>
+              </div>
+            </div>
+          </div>
 
           {/* Collision Warning (simulation mode) */}
           {mode === 'simulation' && useWorkspaceStore.getState().simState.collisionDetected && (

@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 # ── Production IK: roboticstoolbox-python ────────────────────────────────────
 try:
     import numpy as np
-    from roboticstoolbox import DHRobot, RevoluteDH
+    from roboticstoolbox import ERobot, ETS, ET
     from spatialmath import SE3
     RTB_AVAILABLE = True
 except ImportError:
@@ -46,41 +46,39 @@ except ImportError as e:
     CONFIG_AVAILABLE = False
 
 
-def _create_irb6700_dh() -> 'DHRobot':
-    """Create ABB IRB 6700 DH model from URDF-derived parameters.
+def _create_irb6700_ets() -> 'ERobot':
+    """Create ABB IRB 6700 kinematic model as an ETS matching the URDF exactly.
 
-    DH parameters extracted from config/urdf/abb_irb6700.urdf:
-      d1=0.780m  a1=0.320m  (base to shoulder)
-      a2=1.125m             (upper arm)
-      a3=0.200m  d4=1.1425m (forearm with wrist offset)
-      d6=0.200m             (wrist to flange)
+    Each joint is: fixed translation to child-frame origin, then revolute rotation
+    about the joint axis — read directly from config/urdf/abb_irb6700.urdf:
 
-    This is a standard 6R industrial manipulator with 3 intersecting
-    wrist axes — the same kinematic family as most ABB, KUKA, Fanuc robots.
+        joint_1: origin (0, 0, 0.780) m,  axis Z  (0 0 1)
+        joint_2: origin (0.320, 0, 0) m,  axis Y  (0 1 0)
+        joint_3: origin (0, 0, 1.125) m,  axis Y  (0 1 0)
+        joint_4: origin (0, 0, 0.200) m,  axis X  (1 0 0)
+        joint_5: origin (1.1425, 0, 0) m, axis Y  (0 1 0)
+        joint_6: origin (0.200, 0, 0) m,  axis X  (1 0 0)
+
+    Verified against independent SE3 chain:
+        FK(q=zeros) == (1662.5, 0, 2105.0) mm  [arm straight up, full reach forward]
+        FK(J1=90°)  == (0, 1662.5, 2105.0) mm  [arm swung 90° left, same height]
+
+    Reference: abb_irb6700.urdf <joint> origin/axis elements.
+    Library:   roboticstoolbox-python ERobot / ETS (Peter Corke, Springer 2023).
     """
     if not RTB_AVAILABLE:
         return None
 
-    robot = DHRobot([
-        RevoluteDH(d=0.780,   a=0.320, alpha=-np.pi / 2),  # J1: base rotation
-        RevoluteDH(d=0,       a=1.125, alpha=0),             # J2: shoulder
-        RevoluteDH(d=0,       a=0.200, alpha=-np.pi / 2),    # J3: elbow
-        RevoluteDH(d=1.1425,  a=0,     alpha=np.pi / 2),     # J4: wrist 1
-        RevoluteDH(d=0,       a=0,     alpha=-np.pi / 2),    # J5: wrist 2
-        RevoluteDH(d=0.200,   a=0,     alpha=0),              # J6: wrist 3
-    ], name='ABB_IRB_6700')
+    e = ETS([
+        ET.tz(0.780), ET.Rz(),    # joint_1: base rotation around Z
+        ET.tx(0.320), ET.Ry(),    # joint_2: shoulder around Y
+        ET.tz(1.125), ET.Ry(),    # joint_3: elbow around Y
+        ET.tz(0.200), ET.Rx(),    # joint_4: wrist-1 around X
+        ET.tx(1.1425), ET.Ry(),   # joint_5: wrist-2 around Y
+        ET.tx(0.200), ET.Rx(),    # joint_6: wrist-3 around X
+    ])
 
-    # Joint limits from URDF (radians)
-    robot.qlim = np.array([
-        [-2.96706, 2.96706],   # J1
-        [-1.13446, 1.48353],   # J2
-        [-3.14159, 1.22173],   # J3
-        [-5.23599, 5.23599],   # J4
-        [-2.26893, 2.26893],   # J5
-        [-6.28319, 6.28319],   # J6
-    ]).T
-
-    return robot
+    return ERobot(e, name='ABB_IRB6700')
 
 
 class RobotService:
@@ -91,8 +89,8 @@ class RobotService:
         self._ik_solver: Optional[Any] = None
         self._config_manager: Optional[Any] = None
 
-        # Production IK: roboticstoolbox DH model (always available, no URDF loading needed)
-        self._rtb_robot = _create_irb6700_dh()
+        # Production IK: roboticstoolbox ETS model (URDF-derived, always available)
+        self._rtb_robot = _create_irb6700_ets()
         if self._rtb_robot:
             logger.info("production_ik_ready", robot=self._rtb_robot.name, solver="roboticstoolbox")
 
@@ -267,19 +265,74 @@ class RobotService:
         self, target_position: List[float], target_orientation: Optional[List[float]] = None,
         initial_guess: Optional[List[float]] = None
     ) -> Dict[str, Any]:
-        """Compute inverse kinematics for a target pose."""
+        """Compute inverse kinematics for a target pose.
+
+        Input frame: meters, Z-up, robot base frame (same as solve_toolpath_ik).
+        target_orientation: optional [rx_deg, ry_deg, rz_deg] Euler RPY in degrees.
+        If omitted, defaults to tool pointing straight down (-Z), the standard
+        WAAM/manufacturing posture (RPY = [0, 180, 0] deg).
+
+        Uses roboticstoolbox DHRobot.ikine_LM() (same solver as solve_toolpath_ik)
+        when available.  Falls back to compas_fab IK if RTB is not installed.
+
+        Reference: Peter Corke, "Robotics, Vision and Control", Springer 2023.
+        ABB IRB 6700 base frame: Z-up, X forward (ABB Product Manual 3HAC044266).
+        """
+        # ── Primary: roboticstoolbox (same path as solve_toolpath_ik) ──────────
+        if RTB_AVAILABLE and self._rtb_robot is not None:
+            try:
+                robot = self._rtb_robot
+                original_tool = robot.tool
+                robot.tool = SE3()  # No tool offset for single-point move
+
+                if initial_guess and len(initial_guess) >= 6:
+                    q0 = np.array(initial_guess[:6])
+                else:
+                    q0 = np.array(self._get_home_position(6))
+
+                x, y, z = target_position[0], target_position[1], target_position[2]
+
+                if target_orientation and len(target_orientation) >= 3:
+                    # [rx, ry, rz] in degrees
+                    rx, ry, rz = target_orientation[0], target_orientation[1], target_orientation[2]
+                    target = SE3(x, y, z) * SE3.RPY(rx, ry, rz, unit='deg')
+                else:
+                    # Default: tool pointing straight down (-Z), standard WAAM posture
+                    target = SE3(x, y, z) * SE3.RPY(0, 180, 0, unit='deg')
+
+                sol = robot.ikine_LM(target, q0=q0)
+                robot.tool = original_tool
+
+                if sol.success:
+                    joint_names = [f'joint_{i+1}' for i in range(len(sol.q))]
+                    return {
+                        "solution": sol.q.tolist(),
+                        "jointNames": joint_names,
+                        "valid": True,
+                        "solver": "roboticstoolbox",
+                    }
+                else:
+                    return {
+                        "solution": None,
+                        "valid": False,
+                        "error": "IK solver found no solution — target may be unreachable or outside joint limits",
+                        "solver": "roboticstoolbox",
+                    }
+            except Exception as e:
+                return {"solution": None, "valid": False, "error": str(e), "solver": "roboticstoolbox"}
+
+        # ── Fallback: compas_fab PyBullet IK ───────────────────────────────────
         if not self._ik_solver:
-            return {"solution": None, "error": "IK solver not loaded"}
+            return {"solution": None, "valid": False, "error": "No IK solver available (roboticstoolbox not installed)"}
 
         try:
-            # Build target frame
             point = Point(*target_position)
-            if target_orientation:
+            if target_orientation and len(target_orientation) >= 6:
+                # Legacy 6-float format: [xaxis.x, xaxis.y, xaxis.z, yaxis.x, yaxis.y, yaxis.z]
                 xaxis = Vector(target_orientation[0], target_orientation[1], target_orientation[2])
                 yaxis = Vector(target_orientation[3], target_orientation[4], target_orientation[5])
                 target_frame = Frame(point, xaxis, yaxis)
             else:
-                # Default: tool pointing down (standard manufacturing orientation)
                 target_frame = Frame(point, Vector(1, 0, 0), Vector(0, -1, 0))
 
             solution = self._ik_solver.solve(
@@ -295,9 +348,10 @@ class RobotService:
                     "solution": list(solution.joint_values),
                     "jointNames": self._ik_solver.joint_names,
                     "valid": True,
+                    "solver": "compas_fab",
                 }
             else:
-                return {"solution": None, "valid": False, "error": "No IK solution found"}
+                return {"solution": None, "valid": False, "error": "No IK solution found", "solver": "compas_fab"}
 
         except Exception as e:
             return {"solution": None, "valid": False, "error": str(e)}

@@ -14,7 +14,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 import { useRobotStore } from '../../stores/robotStore';
-import { getRobotConfig, getJointLimits, computeFK, loadRobot, solveTrajectoryIK } from '../../api/robot';
+import { getRobotConfig, getJointLimits, computeFK, computeIK, loadRobot, solveTrajectoryIK } from '../../api/robot';
 import type { RobotConfig, JointLimits, FKResult } from '../../api/robot';
 import { createSimulation, getTrajectory } from '../../api/simulation';
 import { checkHealth } from '../../api/client';
@@ -76,6 +76,11 @@ export default function SimulationPanel() {
   const [currentLayer, setCurrentLayer] = useState(0);
   const [totalLayers, setTotalLayers] = useState(0);
 
+  // TCP target move state
+  const [tcpTarget, setTcpTarget] = useState({ x: '', y: '', z: '', rx: '', ry: '', rz: '' });
+  const [tcpMoveStatus, setTcpMoveStatus] = useState<'idle' | 'solving' | 'ok' | 'error'>('idle');
+  const [tcpMoveError, setTcpMoveError] = useState<string | null>(null);
+
   // Refs to prevent double-fire in React strict mode
   const backendConnectedRef = useRef(false);
   const ikComputingRef = useRef(false);
@@ -113,6 +118,47 @@ export default function SimulationPanel() {
     stopIkTimer();
     setIKStatus('idle');
   }, [stopIkTimer, setIKStatus]);
+
+  const handleTcpMove = useCallback(async () => {
+    const x = parseFloat(tcpTarget.x);
+    const y = parseFloat(tcpTarget.y);
+    const z = parseFloat(tcpTarget.z);
+    if (isNaN(x) || isNaN(y) || isNaN(z)) {
+      setTcpMoveError('X, Y, Z are required and must be numbers.');
+      setTcpMoveStatus('error');
+      return;
+    }
+    // Convert mm → metres for the IK solver
+    const pos: [number, number, number] = [x / 1000, y / 1000, z / 1000];
+
+    // Build optional orientation as [rx, ry, rz] in degrees (backend expects degrees)
+    const rxDeg = parseFloat(tcpTarget.rx);
+    const ryDeg = parseFloat(tcpTarget.ry);
+    const rzDeg = parseFloat(tcpTarget.rz);
+    const hasOrientation = !isNaN(rxDeg) && !isNaN(ryDeg) && !isNaN(rzDeg);
+    const orientation = hasOrientation ? [rxDeg, ryDeg, rzDeg] : undefined;
+
+    setTcpMoveStatus('solving');
+    setTcpMoveError(null);
+    try {
+      const result = await computeIK(pos, orientation);
+      if (result.valid && result.solution) {
+        // Prefer names returned by the solver; fall back to jointLimits state
+        const names = result.jointNames ?? jointLimits?.jointNames ?? Object.keys(jointAngles);
+        names.forEach((name, i) => {
+          if (i < result.solution!.length) setJointAngle(name, result.solution![i]);
+        });
+        setTcpMoveStatus('ok');
+      } else {
+        setTcpMoveError(result.error || 'IK solver found no solution for this target.');
+        setTcpMoveStatus('error');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setTcpMoveError(msg);
+      setTcpMoveStatus('error');
+    }
+  }, [tcpTarget, jointLimits, jointAngles, setJointAngle]);
 
   // Init backend connection and load robot config
   useEffect(() => {
@@ -609,6 +655,7 @@ export default function SimulationPanel() {
 
         {/* Joint Control / Trajectory Info */}
         {simMode === 'manual' ? (
+          <>
           <div>
             <h4 className="text-xs font-semibold text-gray-700 mb-3">Joint Angles (drag to move robot)</h4>
             <div className="space-y-2">
@@ -640,6 +687,75 @@ export default function SimulationPanel() {
               })}
             </div>
           </div>
+
+          {/* TCP Target Move */}
+          <div className="border rounded-lg p-3 bg-gray-50 border-gray-200">
+            <h4 className="text-xs font-semibold text-gray-700 mb-3">
+              Move TCP to Target
+              <span className="text-gray-400 ml-1 font-normal text-[10px]">(Robot Base Frame)</span>
+            </h4>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              {([
+                { key: 'x', label: 'X — forward', color: 'text-red-500' },
+                { key: 'y', label: 'Y — left',    color: 'text-green-500' },
+                { key: 'z', label: 'Z — up ↑',    color: 'text-blue-500' },
+              ] as const).map(({ key: axis, label, color }) => (
+                <div key={axis} className="flex flex-col">
+                  <label className={`text-[10px] mb-0.5 font-semibold ${color}`}>{label} (mm)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="0.0"
+                    value={tcpTarget[axis]}
+                    onChange={(e) => {
+                      setTcpTarget((prev) => ({ ...prev, [axis]: e.target.value }));
+                      setTcpMoveStatus('idle');
+                    }}
+                    className="border border-gray-300 rounded px-2 py-1 text-xs font-mono bg-white focus:outline-none focus:border-blue-400 w-full"
+                  />
+                </div>
+              ))}
+              {(['rx', 'ry', 'rz'] as const).map((axis) => (
+                <div key={axis} className="flex flex-col">
+                  <label className="text-[10px] text-gray-500 mb-0.5 uppercase">{axis} (deg)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="optional"
+                    value={tcpTarget[axis]}
+                    onChange={(e) => {
+                      setTcpTarget((prev) => ({ ...prev, [axis]: e.target.value }));
+                      setTcpMoveStatus('idle');
+                    }}
+                    className="border border-gray-300 rounded px-2 py-1 text-xs font-mono bg-white focus:outline-none focus:border-blue-400 w-full"
+                  />
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={handleTcpMove}
+              disabled={tcpMoveStatus === 'solving' || !backendConnected}
+              className={`w-full py-1.5 text-xs font-semibold rounded transition-colors ${
+                tcpMoveStatus === 'solving'
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : !backendConnected
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+            >
+              {tcpMoveStatus === 'solving' ? 'Solving IK…' : 'Move to Target'}
+            </button>
+            {tcpMoveStatus === 'ok' && (
+              <p className="text-[10px] text-green-600 mt-1">IK solved — robot moved to target.</p>
+            )}
+            {tcpMoveStatus === 'error' && tcpMoveError && (
+              <p className="text-[10px] text-red-500 mt-1">{tcpMoveError}</p>
+            )}
+            {!backendConnected && (
+              <p className="text-[10px] text-gray-400 mt-1">Backend offline — start server to enable.</p>
+            )}
+          </div>
+          </>
         ) : (
           <div>
             <h4 className="text-xs font-semibold text-gray-700 mb-3">Trajectory Info</h4>
@@ -692,15 +808,24 @@ export default function SimulationPanel() {
             ) : fkResult?.valid ? (
               <>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600">X</span>
+                  <span className="text-gray-600">
+                    <span className="text-red-500 font-bold text-xs">X</span>
+                    <span className="text-gray-400 ml-1 text-[10px]">forward</span>
+                  </span>
                   <span className="font-medium text-gray-900 font-mono">{(fkResult.position.x * 1000).toFixed(1)} mm</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600">Y</span>
+                  <span className="text-gray-600">
+                    <span className="text-green-500 font-bold text-xs">Y</span>
+                    <span className="text-gray-400 ml-1 text-[10px]">left</span>
+                  </span>
                   <span className="font-medium text-gray-900 font-mono">{(fkResult.position.y * 1000).toFixed(1)} mm</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600">Z</span>
+                  <span className="text-gray-600">
+                    <span className="text-blue-500 font-bold text-xs">Z</span>
+                    <span className="text-gray-400 ml-1 text-[10px]">up ↑</span>
+                  </span>
                   <span className="font-medium text-gray-900 font-mono">{(fkResult.position.z * 1000).toFixed(1)} mm</span>
                 </div>
               </>

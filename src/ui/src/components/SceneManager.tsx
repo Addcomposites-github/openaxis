@@ -14,6 +14,7 @@ import {
   GizmoViewcube,
   TransformControls,
   Line,
+  Html,
 } from '@react-three/drei';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -442,9 +443,60 @@ function WorkFrameGizmo({ frameId, active }: { frameId: string; active: boolean 
   );
 }
 
+// ─── Axes with Labels ────────────────────────────────────────────────────────
+// Draws X/Y/Z arms as thick lines + Html labels at tips.
+// Uses drei <Html> (same as BuildPlate.tsx) — no external font needed.
+
+function AxesWithLabels({ size = 1 }: { size?: number }) {
+  const s = size;
+  const axes = [
+    { dir: [s, 0, 0] as [number, number, number], color: '#ef4444', label: 'X' },
+    { dir: [0, s, 0] as [number, number, number], color: '#22c55e', label: 'Y' },
+    { dir: [0, 0, s] as [number, number, number], color: '#3b82f6', label: 'Z' },
+  ];
+  return (
+    <group>
+      {axes.map(({ dir, color, label }) => (
+        <group key={label}>
+          <Line
+            points={[[0, 0, 0], dir]}
+            color={color}
+            lineWidth={2.5}
+          />
+          {/* Tip sphere */}
+          <mesh position={dir}>
+            <sphereGeometry args={[s * 0.04, 8, 8]} />
+            <meshBasicMaterial color={color} />
+          </mesh>
+          {/* Html label — always faces camera, unaffected by scene rotation */}
+          <Html position={dir} center style={{ pointerEvents: 'none' }}>
+            <span style={{
+              color,
+              fontWeight: 'bold',
+              fontSize: '12px',
+              fontFamily: 'monospace',
+              background: 'rgba(0,0,0,0.55)',
+              padding: '1px 4px',
+              borderRadius: '3px',
+              userSelect: 'none',
+            }}>
+              {label}
+            </span>
+          </Html>
+        </group>
+      ))}
+    </group>
+  );
+}
+
 // ─── Main SceneManager ──────────────────────────────────────────────────────
 
-export default function SceneManager() {
+interface SceneManagerProps {
+  showWorldAxes?: boolean;
+  showRobotBaseAxes?: boolean;
+}
+
+export default function SceneManager({ showWorldAxes = false, showRobotBaseAxes = false }: SceneManagerProps) {
   const mode = useWorkspaceStore((s) => s.mode);
   const cellSetup = useWorkspaceStore((s) => s.cellSetup);
   const geometryParts = useWorkspaceStore((s) => s.geometryParts);
@@ -689,6 +741,16 @@ export default function SceneManager() {
         <cylinderGeometry args={[0.3, 0.35, 0.1, 32]} />
         <meshStandardMaterial color="#94a3b8" metalness={0.6} roughness={0.4} />
       </mesh>
+
+      {/* World origin axes — 1 m arms, X=red Y=green Z=blue (Three.js Y-up) */}
+      {showWorldAxes && <AxesWithLabels size={1} />}
+
+      {/* Robot base frame axes — positioned+rotated at robot base */}
+      {showRobotBaseAxes && (
+        <group position={robotPosition} rotation={robotRotation}>
+          <AxesWithLabels size={0.6} />
+        </group>
+      )}
 
       {/* Robot — always present (URDF is in meters natively) */}
       <RobotModel
