@@ -6,100 +6,94 @@ Build an industry-ready, open-source robotic hybrid manufacturing platform that 
 
 ---
 
-## Phase 1: Foundation (Months 1-3)
+## Current Status Summary (as of 2026-02-20)
+
+| Phase | Status |
+|-------|--------|
+| Phase 1 — Foundation | ✅ Complete |
+| Phase 2 — Motion Planning & Multi-Process | 🔜 Not started |
+| Phase 3 — Production UI & Monitoring | 🟡 Partial (~40%) |
+| Phase 4 — Industrial Hardening | 🔜 Not started |
+
+**What works end-to-end right now:** Import STL → Slice → Solve IK → Preview in 3D → Export RAPID/KRL/G-code/Fanuc.
+
+**Known gaps:** Simulation is kinematic replay (not physics), monitoring shows placeholder data, non-planar slicers raise NotImplementedError, no hardware drivers yet.
+
+---
+
+## Phase 1: Foundation ✅ COMPLETE
 
 ### Objective
 Establish core architecture and demonstrate end-to-end WAAM workflow.
 
 ### Milestones
 
-#### 1.1 Project Setup (Week 1-2)
-- [ ] Repository structure with proper packaging
-- [ ] CI/CD pipeline (GitHub Actions)
-- [ ] Development environment (conda + Docker)
-- [ ] Documentation framework (MkDocs)
-- [ ] Contribution guidelines
+#### 1.1 Project Setup
+- [x] Repository structure with proper packaging
+- [x] CI/CD pipeline (GitHub Actions)
+- [x] Development environment (conda)
+- [x] Contribution guidelines
 
-#### 1.2 Core Framework (Week 3-6)
-- [ ] Configuration management system
-- [ ] Plugin architecture for processes
-- [ ] Logging and telemetry framework
-- [ ] Error handling patterns
-- [ ] Basic CLI interface
+#### 1.2 Core Framework
+- [x] Configuration management system
+- [x] Plugin architecture for processes (WAAM, Pellet, Milling)
+- [x] Logging framework (structlog)
+- [x] Error handling patterns
+- [ ] Basic CLI interface — not yet, UI only
 
-#### 1.3 COMPAS Integration (Week 4-8)
-- [ ] Geometry data structures (mesh, brep handling)
-- [ ] Robot model loading (URDF parsing)
-- [ ] Basic forward/inverse kinematics
-- [ ] compas_fab backend setup
+#### 1.3 COMPAS Integration
+- [x] Geometry data structures (trimesh + COMPAS)
+- [x] Robot model loading (URDF parsing via compas_robots)
+- [x] Forward/inverse kinematics (roboticstoolbox-python + compas_fab PyBullet backend)
+- [x] compas_fab backend setup
 
-#### 1.4 ORNL Slicer 2 Integration (Week 6-10)
-- [ ] Python bindings/wrapper for Slicer 2
-- [ ] STL/STEP import pipeline
-- [ ] Basic planar slicing
-- [ ] G-code generation for WAAM
+#### 1.4 ORNL Slicer 2 Integration
+- [x] Subprocess wrapper for Slicer 2 (`src/openaxis/slicing/ornl_slicer.py`)
+- [x] STL/STEP import pipeline
+- [x] Basic planar slicing
+- [x] G-code generation for WAAM
 - [ ] Toolpath visualization
 
-#### 1.5 Simulation Environment (Week 8-12)
-- [ ] pybullet_industrial integration
-- [ ] Basic robot visualization
-- [ ] Material deposition simulation
-- [ ] Collision detection setup
+#### 1.5 Simulation Environment
+- [x] pybullet_industrial integration (PyBullet environment + tool creation)
+- [x] Robot visualization (Three.js kinematic replay in UI)
+- [ ] Material deposition simulation — PyBullet code exists but not wired to UI (Phase 3)
+- [ ] Collision detection — not active
 
-### Deliverables
-- Working CLI that takes STL → generates WAAM toolpath → simulates in pybullet
-- Documentation: Architecture overview, setup guide
-- Test coverage: >70% for core modules
-
-### Dependencies to Install
-```
-compas>=2.0
-compas_fab>=0.28
-pybullet>=3.2
-pybullet_industrial>=1.0
-numpy
-scipy
-trimesh
-python-fcl
-```
+### Deliverables — Achieved
+- Desktop app: STL → Slice → IK → 3D preview → Export robot code
+- 4 post-processors: RAPID, KRL, Fanuc TP, G-code
+- 331 automated tests passing
+- ABB IRB 6700 fully configured (URDF + IK)
 
 ---
 
-## Phase 2: Multi-Process & Motion (Months 4-6)
+## Phase 2: Motion Planning & Advanced Slicing 🔜 NOT STARTED
 
 ### Objective
-Add pellet extrusion, milling, and proper motion planning with external axes.
+Production-grade motion planning with ROS2/MoveIt2, non-planar slicing, external axes.
 
 ### Milestones
 
-#### 2.1 MoveIt2 Integration (Week 1-4)
-- [ ] ROS2 Humble workspace setup
+#### 2.1 MoveIt2 Integration
+- [ ] ROS2 Humble workspace setup (requires Docker)
 - [ ] MoveIt2 configuration generator
-- [ ] Cartesian path planning
-- [ ] Joint trajectory execution
+- [ ] Cartesian path planning with trajectory optimization (ruckig/topp-ra)
 - [ ] compas_fab ↔ MoveIt2 bridge
 
-#### 2.2 External Axes Support (Week 3-6)
-- [ ] Positioner (2-axis) modeling
+#### 2.2 External Axes Support
+- [ ] Positioner (2-axis) coordinated motion
 - [ ] Linear track modeling
-- [ ] Coordinated motion planning
 - [ ] Multi-group trajectory synchronization
 
-#### 2.3 Pellet Extrusion Process (Week 4-8)
-- [ ] Process plugin implementation
-- [ ] Extrusion parameters (temp, flow, speed)
-- [ ] Layer-by-layer toolpath generation
-- [ ] Adaptive layer height support
+#### 2.3 Non-Planar Slicing
+- [ ] Angled slicer (currently raises NotImplementedError)
+- [ ] Radial slicer (currently raises NotImplementedError)
+- [ ] Curve slicer (currently raises NotImplementedError)
+- [ ] 5-axis milling (needs Noether/ROS-Industrial — OpenCAMLib is 3-axis only)
 
-#### 2.4 Milling Process (Week 6-10)
-- [ ] Subtractive toolpath generation
-- [ ] Tool library management
-- [ ] Roughing/finishing strategies
-- [ ] Force estimation (basic)
-
-#### 2.5 Process Sequencing (Week 8-12)
-- [ ] Multi-process job definition
-- [ ] Additive → Subtractive workflow
+#### 2.4 Process Sequencing
+- [ ] Multi-process job definition (additive → subtractive workflow)
 - [ ] Tool change handling
 - [ ] Process parameter handoff
 
@@ -120,70 +114,51 @@ joint_state_publisher
 
 ---
 
-## Phase 3: Production UI & Monitoring (Months 7-9)
+## Phase 3: Production UI & Monitoring 🟡 PARTIAL (~40%)
 
 ### Objective
-Create user-friendly interface with real-time monitoring capabilities.
+Full real-time monitoring, physics simulation wired to UI, production-ready application.
 
 ### Milestones
 
-#### 3.1 Desktop Application Shell (Week 1-3)
-- [ ] Electron + React setup
-- [ ] Python backend communication (IPC)
-- [ ] Theme and layout system
-- [ ] State management (Redux/Zustand)
+#### 3.1 Desktop Application Shell
+- [x] Electron + React setup (Electron 28, React 18)
+- [x] Python backend communication (REST API over localhost)
+- [x] Theme and layout system (Tailwind CSS)
+- [x] State management (Zustand)
 
-#### 3.2 3D Visualization (Week 2-6)
-- [ ] Three.js scene setup
-- [ ] Robot model rendering
-- [ ] Toolpath visualization
-- [ ] Interactive camera controls
-- [ ] Real-time simulation playback
+#### 3.2 3D Visualization
+- [x] Three.js scene setup
+- [x] Robot model rendering (ABB IRB 6700)
+- [x] Toolpath visualization (layer-by-layer)
+- [x] Interactive camera controls
+- [x] Kinematic trajectory playback (robot follows waypoints)
+- [ ] True physics simulation — PyBullet code exists but not connected to UI
 
-#### 3.3 Project Management (Week 4-8)
-- [ ] Project create/load/save
-- [ ] Part import (STL, STEP, 3MF)
-- [ ] Process configuration UI
-- [ ] Robot cell configuration UI
+#### 3.3 Project Management
+- [x] Part import (STL, STEP, 3MF via trimesh)
+- [x] Process configuration UI (slicing parameters panel)
+- [x] Robot cell configuration UI (position, orientation)
+- [ ] Project create/load/save — not yet
 
-#### 3.4 Toolpath Editor (Week 6-10)
-- [ ] Interactive toolpath modification
-- [ ] Region-based parameter editing
-- [ ] Preview with collision checking
-- [ ] Undo/redo system
+#### 3.4 Toolpath Editor
+- [x] Toolpath visualization
+- [ ] Interactive toolpath modification — not yet
+- [ ] Collision checking UI — not yet (backend check exists but returns "Not Active")
 
-#### 3.5 Monitoring Dashboard (Week 8-12)
-- [ ] Real-time robot state display
-- [ ] Process parameter monitoring
-- [ ] Sensor data visualization
-- [ ] Job progress tracking
-- [ ] Data logging to file/database
-
-### Deliverables
-- Desktop application (Windows, Linux, macOS)
-- Interactive 3D visualization
-- Complete workflow UI
-- Real-time monitoring
-
-### UI Dependencies
-```json
-{
-  "electron": "^28.0.0",
-  "react": "^18.2.0",
-  "three": "^0.160.0",
-  "@react-three/fiber": "^8.15.0",
-  "@react-three/drei": "^9.92.0",
-  "zustand": "^4.4.0",
-  "tailwindcss": "^3.4.0"
-}
-```
+#### 3.5 Monitoring Dashboard
+- [x] Dashboard UI exists (Recharts panels)
+- [ ] Real-time robot state from hardware — placeholder data only
+- [ ] Real process parameter monitoring (temp, flow, pressure) — shows fake numbers
+- [ ] Sensor data — not connected
+- [ ] Data logging — not yet
 
 ---
 
-## Phase 4: Industrial Hardening (Months 10-12)
+## Phase 4: Industrial Hardening 🔜 NOT STARTED
 
 ### Objective
-Production-ready reliability, multi-vendor support, and deployment tools.
+Production-ready reliability, multi-vendor robot support, and real hardware drivers.
 
 ### Milestones
 

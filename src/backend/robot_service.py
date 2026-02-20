@@ -19,6 +19,10 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from openaxis.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 # ── Production IK: roboticstoolbox-python ────────────────────────────────────
 try:
     import numpy as np
@@ -27,7 +31,7 @@ try:
     RTB_AVAILABLE = True
 except ImportError:
     RTB_AVAILABLE = False
-    print("Warning: roboticstoolbox-python not installed. Using fallback IK solver.")
+    logger.warning("rtb_unavailable", msg="roboticstoolbox-python not installed, using fallback IK solver")
 
 # ── Fallback IK: compas_fab PyBulletClient ───────────────────────────────────
 try:
@@ -38,7 +42,7 @@ try:
     from compas_robots import Configuration
     CONFIG_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: Robot modules not available: {e}")
+    logger.warning("robot_modules_unavailable", error=str(e))
     CONFIG_AVAILABLE = False
 
 
@@ -90,14 +94,14 @@ class RobotService:
         # Production IK: roboticstoolbox DH model (always available, no URDF loading needed)
         self._rtb_robot = _create_irb6700_dh()
         if self._rtb_robot:
-            print(f"[RobotService] Production IK ready: {self._rtb_robot.name} (roboticstoolbox)")
+            logger.info("production_ik_ready", robot=self._rtb_robot.name, solver="roboticstoolbox")
 
         if CONFIG_AVAILABLE and config_dir:
             try:
                 self._config_manager = ConfigManager(config_dir=Path(config_dir))
                 self._config_manager.load()
             except Exception as e:
-                print(f"Warning: Failed to load config: {e}")
+                logger.warning("config_load_failed", error=str(e))
 
     def get_available_robots(self) -> List[str]:
         """List available robot configurations."""
@@ -124,7 +128,7 @@ class RobotService:
                 "communication": config.communication,
             }
         except Exception as e:
-            print(f"Warning: Failed to get robot config: {e}")
+            logger.warning("robot_config_failed", error=str(e))
             return self._default_robot_config()
 
     def load_robot(self, robot_name: str = "abb_irb6700") -> bool:
@@ -155,7 +159,7 @@ class RobotService:
             )
             return True
         except Exception as e:
-            print(f"Warning: Failed to load robot: {e}")
+            logger.warning("robot_load_failed", error=str(e))
             return False
 
     def _get_home_position(self, n_joints: int = 6) -> list[float]:
@@ -401,9 +405,14 @@ class RobotService:
 
         dt = time.perf_counter() - t0
         n = len(waypoints)
-        print(
-            f"[IK-RTB] Solved {successes}/{n} waypoints in {dt:.2f}s "
-            f"({dt/max(n,1)*1000:.1f}ms/pt), chunk_start={chunk_start}"
+        logger.info(
+            "ik_solve_complete",
+            solver="roboticstoolbox",
+            successes=successes,
+            total=n,
+            time_s=round(dt, 2),
+            ms_per_point=round(dt / max(n, 1) * 1000, 1),
+            chunk_start=chunk_start,
         )
 
         return {
@@ -434,8 +443,12 @@ class RobotService:
         if tcp_offset and len(tcp_offset) >= 3:
             tcp_z = tcp_offset[2]
             if tcp_offset[0] != 0 or tcp_offset[1] != 0:
-                print(f"[IK-Compas] Warning: COMPAS IK only supports Z TCP offset. "
-                      f"X={tcp_offset[0]}, Y={tcp_offset[1]} ignored.")
+                logger.warning(
+                    "compas_ik_partial_tcp_offset",
+                    msg="COMPAS IK only supports Z TCP offset",
+                    ignored_x=tcp_offset[0],
+                    ignored_y=tcp_offset[1],
+                )
 
         if initial_guess is None:
             initial_guess = self._get_home_position(6)
@@ -469,9 +482,13 @@ class RobotService:
 
         dt = time.perf_counter() - t0
         n = len(waypoints)
-        print(
-            f"[IK-Compas] Solved {successes}/{n} waypoints in {dt:.2f}s, "
-            f"chunk_start={chunk_start}"
+        logger.info(
+            "ik_solve_complete",
+            solver="compas",
+            successes=successes,
+            total=n,
+            time_s=round(dt, 2),
+            chunk_start=chunk_start,
         )
 
         return {

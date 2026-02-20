@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import {
   DocumentArrowDownIcon,
   ChevronDownIcon,
@@ -64,7 +65,6 @@ export default function PostProcessorPanel() {
   const [hooksExpanded, setHooksExpanded] = useState(false);
   const [varsExpanded, setVarsExpanded] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [notification, setNotification] = useState<string | null>(null);
 
   const selectedFormat = availableFormats.find((f) => f.id === config.format);
 
@@ -72,13 +72,12 @@ export default function PostProcessorPanel() {
 
   const handleExport = async () => {
     if (!toolpathData) {
-      setNotification('No toolpath to export');
-      setTimeout(() => setNotification(null), 2000);
+      toast.error('No toolpath to export');
       return;
     }
 
     setExporting(true);
-    setNotification(`Exporting ${selectedFormat?.name ?? config.format}...`);
+    const toastId = toast.loading(`Exporting ${selectedFormat?.name ?? config.format}...`);
 
     try {
       // Build config for backend
@@ -122,7 +121,7 @@ export default function PostProcessorPanel() {
             lines: response.data.data.lines || 0,
             size: response.data.data.size || content.length,
           });
-          setNotification(`Exported ${response.data.data.lines} lines as ${response.data.data.formatName || config.format}`);
+          toast.success(`Exported ${response.data.data.lines} lines as ${response.data.data.formatName || config.format}`, { id: toastId });
         } else {
           throw new Error('Backend returned no content');
         }
@@ -130,7 +129,7 @@ export default function PostProcessorPanel() {
         // Fallback: use the basic G-code export
         content = generateFallbackGCode(toolpathData);
         ext = '.gcode';
-        setNotification('Exported G-code (offline mode)');
+        toast('Exported G-code (offline mode)', { id: toastId, icon: '\u26A0\uFE0F' });
       }
 
       // Download file
@@ -144,10 +143,8 @@ export default function PostProcessorPanel() {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
-      setTimeout(() => setNotification(null), 3000);
     } catch (error: any) {
-      setNotification(`Error: ${error.message}`);
-      setTimeout(() => setNotification(null), 3000);
+      toast.error(error.message || 'Export failed', { id: toastId });
     } finally {
       setExporting(false);
     }
@@ -174,13 +171,6 @@ export default function PostProcessorPanel() {
 
   return (
     <div className="space-y-4">
-      {/* Notification */}
-      {notification && (
-        <div className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg">
-          {notification}
-        </div>
-      )}
-
       {/* Format Selector */}
       <div>
         <h4 className="text-xs font-semibold text-gray-900 mb-2">Export Format</h4>

@@ -12,6 +12,10 @@ import json
 import os
 from pathlib import Path
 
+from openaxis.core.logging import get_logger
+
+_logger = get_logger(__name__)
+
 
 @dataclass
 class MaterialProperties:
@@ -418,7 +422,7 @@ class MaterialLibrary:
                     mat.is_built_in = False
                     self._materials[mat.id] = mat
             except Exception as e:
-                print(f"Warning: Failed to load material from {file}: {e}")
+                _logger.warning("material_load_failed", file=str(file), error=str(e))
 
     def get_all(self) -> List[MaterialProfile]:
         """Get all material profiles."""

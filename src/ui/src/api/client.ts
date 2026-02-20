@@ -1,4 +1,5 @@
 import axios from 'axios';
+import toast from 'react-hot-toast';
 
 export const API_BASE_URL = 'http://localhost:8080';
 
@@ -9,6 +10,22 @@ export const apiClient = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Global error interceptor — shows toast for network failures and 5xx errors.
+// Individual callers still receive the rejected promise for specific handling.
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (!error.response) {
+      // Network error (backend unreachable)
+      toast.error('Backend not reachable. Is the server running?', { id: 'network-error' });
+    } else if (error.response.status >= 500) {
+      const msg = error.response.data?.error || 'Internal server error';
+      toast.error(`Server error: ${msg}`, { id: 'server-error' });
+    }
+    return Promise.reject(error);
+  },
+);
 
 export interface ApiResponse<T = any> {
   status: 'success' | 'error' | 'ok';

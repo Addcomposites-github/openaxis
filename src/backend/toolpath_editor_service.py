@@ -26,10 +26,11 @@ returns it so callers can chain or inspect the result directly.
 """
 
 import copy
-import logging
 from typing import Any, Dict, List
 
-logger = logging.getLogger(__name__)
+from openaxis.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ToolpathEditorService:

@@ -12,13 +12,17 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from openaxis.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from openaxis.slicing import PlanarSlicer, Toolpath, InfillPattern
     from openaxis.slicing.slicer_factory import get_slicer, SLICER_REGISTRY
     from openaxis.core.geometry import GeometryLoader
     SLICING_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: Slicing modules not available: {e}")
+    logger.warning("slicing_modules_unavailable", error=str(e))
     SLICING_AVAILABLE = False
 
 
@@ -177,8 +181,8 @@ class ToolpathService:
             if toolpath.segments:
                 seg0 = toolpath.segments[0]
                 pts = [(float(p.x), float(p.y), float(p.z)) for p in seg0.points[:3]]
-                print(f"[TOOLPATH-DEBUG] First segment type={seg0.type}, first 3 points (Z-up mm): {pts}")
-                print(f"[TOOLPATH-DEBUG] Total segments: {len(toolpath.segments)}, layers: {toolpath.total_layers}")
+                logger.debug("toolpath_first_segment", type=str(seg0.type), points=pts)
+                logger.debug("toolpath_summary", segments=len(toolpath.segments), layers=toolpath.total_layers)
 
             # Post-process: optimize segment order for smooth printing
             # (nearest-neighbor reordering + cross-layer continuity)

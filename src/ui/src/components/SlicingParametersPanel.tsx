@@ -10,6 +10,22 @@ export interface SlicingParameters {
   processType: 'waam' | 'pellet_extrusion' | 'milling';
 }
 
+/** Clamp a slicing parameter to its valid range. */
+function clampSlicingParam(key: keyof SlicingParameters, value: any): any {
+  switch (key) {
+    case 'layerHeight':
+      return Math.max(0.1, Math.min(20, Number(value) || 0.1));
+    case 'extrusionWidth':
+      return Math.max(0.5, Math.min(40, Number(value) || 0.5));
+    case 'wallCount':
+      return Math.max(1, Math.min(10, Math.round(Number(value) || 1)));
+    case 'infillDensity':
+      return Math.max(0, Math.min(1, Number(value) || 0));
+    default:
+      return value;
+  }
+}
+
 interface SlicingParametersPanelProps {
   parameters: SlicingParameters;
   onChange: (parameters: SlicingParameters) => void;
@@ -43,7 +59,9 @@ export default function SlicingParametersPanel({
   }, [selectedMaterialId, materials, onChange]);
 
   const handleChange = (key: keyof SlicingParameters, value: any) => {
-    onChange({ ...parameters, [key]: value });
+    // Clamp numeric values to valid ranges
+    const clamped = clampSlicingParam(key, value);
+    onChange({ ...parameters, [key]: clamped });
   };
 
   // Find currently selected material for badge

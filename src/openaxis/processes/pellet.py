@@ -14,6 +14,9 @@ from compas_robots import Configuration
 
 from openaxis.processes.base import ProcessParameters, ProcessPlugin, ProcessType
 from openaxis.slicing.toolpath import Toolpath, ToolpathType
+from openaxis.core.logging import get_logger
+
+_logger = get_logger(__name__)
 
 
 @dataclass
@@ -200,9 +203,8 @@ class PelletExtrusionProcess(ProcessPlugin):
         - Heating bed to bed temperature
         - Priming extruder
         """
-        print(f"Heating nozzle to {self.params.extrusion_temperature}°C...")
-        print(f"Heating bed to {self.params.bed_temperature}°C...")
-        print("Priming extruder...")
+        _logger.info("pellet_pre_process", nozzle_temp=self.params.extrusion_temperature, bed_temp=self.params.bed_temperature)
+        _logger.info("pellet_priming_extruder")
 
     def post_process(self) -> None:
         """
@@ -213,9 +215,9 @@ class PelletExtrusionProcess(ProcessPlugin):
         - Cooling bed
         - Retracting material
         """
-        print("Retracting material...")
-        print("Cooling nozzle...")
-        print("Cooling bed...")
+        _logger.info("pellet_post_process", step="retracting_material")
+        _logger.info("pellet_post_process", step="cooling_nozzle")
+        _logger.info("pellet_post_process", step="cooling_bed")
 
     def calculate_extrusion_amount(self, distance: float, width: float) -> float:
         """

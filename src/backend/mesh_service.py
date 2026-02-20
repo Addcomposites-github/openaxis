@@ -5,12 +5,15 @@ Wraps mesh_operations module with undo support and JSON-serializable
 results for the REST API.
 """
 
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from openaxis.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 try:
     from openaxis.geometry.mesh_operations import (
@@ -24,10 +27,8 @@ try:
     from openaxis.core.geometry import GeometryLoader, GeometryConverter, BoundingBox
     MESH_OPS_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: Mesh operations not available: {e}")
+    logger.warning("mesh_operations_unavailable", error=str(e))
     MESH_OPS_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
 
 
 class MeshService:

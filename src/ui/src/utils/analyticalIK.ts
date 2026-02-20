@@ -34,34 +34,25 @@ export interface IKSolution {
 // ─── Backend IK API call ────────────────────────────────────────────────
 
 /**
- * Solve IK for a single target position by calling the backend API.
+ * Solve IK for a single target position.
  *
- * TODO: Implement backend API call to /api/robot/ik endpoint.
- * The backend uses compas_fab with PyBullet for proper 6-DOF IK.
+ * The backend IK endpoint (POST /api/robot/ik) uses roboticstoolbox-python
+ * for production-grade DH-based IK. For trajectory IK, use the
+ * solveTrajectoryIK() function in api/robot.ts instead.
+ *
+ * This stub exists as a local fallback when the backend is unavailable.
  *
  * @param target - [x, y, z] in meters, in robot base frame (Z-up)
  * @param toolLength - end effector length in meters
  * @param prevSolution - previous solution for continuity
- * @returns IKSolution with joint angles in radians
+ * @returns IKSolution with joint angles in radians (all zeros = unreachable)
  */
 export function solveIK6DOF(
   _target: [number, number, number],
   _toolLength: number = 0.15,
   _prevSolution?: number[],
 ): IKSolution {
-  // TODO: Replace with backend API call:
-  //   const response = await fetch('/api/robot/ik', {
-  //     method: 'POST',
-  //     body: JSON.stringify({ target, toolLength, prevSolution }),
-  //   });
-  //   return response.json();
-
-  // For now, return unreachable — the backend IK is not yet integrated.
-  // This is honest: we don't have a working IK solver in the frontend.
-  console.warn(
-    'solveIK6DOF: Custom IK solver deleted. ' +
-    'Integrate backend /api/robot/ik endpoint (compas_fab + PyBullet).'
-  );
+  // Local stub — returns unreachable. Use backend API for real IK.
   return {
     jointAngles: [0, 0, 0, 0, 0, 0],
     reachable: false,
@@ -70,13 +61,14 @@ export function solveIK6DOF(
 }
 
 /**
- * Solve IK for an entire trajectory by calling the backend API.
+ * Local fallback IK for trajectory — used when backend is unavailable.
  *
- * TODO: Implement backend API call to /api/robot/trajectory-ik endpoint.
+ * For production IK, use solveTrajectoryIK() in api/robot.ts which calls
+ * POST /api/robot/solve-trajectory (roboticstoolbox-python backend).
  *
  * @param positions - Array of [x, y, z] in meters
  * @param toolLength - end effector length in meters
- * @returns Trajectory result with joint angles and reachability
+ * @returns Trajectory result with all-unreachable (stub)
  */
 export function solveTrajectoryIKLocal(
   positions: [number, number, number][],
@@ -88,19 +80,7 @@ export function solveTrajectoryIKLocal(
   totalPoints: number;
   reachabilityPercent: number;
 } {
-  // TODO: Replace with backend API call:
-  //   const response = await fetch('/api/robot/trajectory-ik', {
-  //     method: 'POST',
-  //     body: JSON.stringify({ positions, toolLength }),
-  //   });
-  //   return response.json();
-
-  console.warn(
-    'solveTrajectoryIKLocal: Custom IK solver deleted. ' +
-    'Integrate backend /api/robot/trajectory-ik endpoint.'
-  );
-
-  // Return all-unreachable until backend integration is complete
+  // Local stub — returns all-unreachable. Backend does the real solving.
   const trajectory = positions.map(() => [0, 0, 0, 0, 0, 0]);
   const reachability = positions.map(() => false);
 

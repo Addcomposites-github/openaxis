@@ -5,3 +5,4 @@ export * from './robot';
 export * from './simulation';
 export * from './toolpath';
 export * from './geometry';
+export * from './pipeline';

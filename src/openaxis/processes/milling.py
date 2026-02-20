@@ -15,6 +15,9 @@ from compas_robots import Configuration
 
 from openaxis.processes.base import ProcessParameters, ProcessPlugin, ProcessType
 from openaxis.slicing.toolpath import Toolpath, ToolpathType
+from openaxis.core.logging import get_logger
+
+_logger = get_logger(__name__)
 
 
 class MillingStrategy(Enum):
@@ -218,11 +221,11 @@ class MillingProcess(ProcessPlugin):
         - Spindle start
         - Coolant on
         """
-        print(f"Loading tool T{self.params.tool_offset} (Ø{self.params.tool_diameter}mm)...")
-        print(f"Starting spindle at {self.params.spindle_speed:.0f} RPM...")
+        _logger.info("milling_pre_process", tool_offset=self.params.tool_offset, tool_diameter=self.params.tool_diameter)
+        _logger.info("milling_spindle_start", rpm=self.params.spindle_speed)
 
         if self.params.coolant_enabled:
-            print("Coolant ON")
+            _logger.info("milling_coolant", state="on")
 
     def post_process(self) -> None:
         """
@@ -233,12 +236,12 @@ class MillingProcess(ProcessPlugin):
         - Coolant off
         - Tool change to safe tool
         """
-        print("Stopping spindle...")
+        _logger.info("milling_spindle_stop")
 
         if self.params.coolant_enabled:
-            print("Coolant OFF")
+            _logger.info("milling_coolant", state="off")
 
-        print("Returning to tool change position...")
+        _logger.info("milling_return_to_tool_change")
 
     def calculate_material_removal_rate(self) -> float:
         """

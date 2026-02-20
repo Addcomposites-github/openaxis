@@ -4,10 +4,11 @@ Post Processor Service — selects and runs the appropriate post processor.
 Manages post processor instances and configuration, provides export functionality.
 """
 
-import logging
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+from openaxis.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 try:
     from openaxis.postprocessor import (

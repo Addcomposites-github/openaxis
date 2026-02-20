@@ -10,11 +10,12 @@ Provides:
 """
 
 import math
-import logging
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+from openaxis.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # ─── Data Classes ────────────────────────────────────────────────────────────
