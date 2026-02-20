@@ -111,6 +111,38 @@ If a specified library cannot be pip-installed or integrated:
 - Find a proven pip-installable alternative from the same ecosystem
 - If no alternative exists, raise NotImplementedError with a clear message
 
+## CRITICAL: No Ungrounded Tests
+
+A test is only meaningful if its expected outputs were verified by something
+other than the LLM that wrote the code being tested.
+
+**NEVER write tests where:**
+- The LLM generated both the code AND the expected values
+- Expected outputs come from running the code and accepting what it produced
+- A trivial geometry (cube, single line) is used to avoid testing real failure modes
+- The test passes by checking for zeros or empty lists (that is checking for a stub, not behaviour)
+
+**Tests are only acceptable when the expected values come from:**
+1. **Physics-verified results** — output from a real robot run, a real print, measured coordinates
+2. **Independently published data** — test fixtures from proven open-source slicers
+   (CuraEngine: https://github.com/Ultimaker/CuraEngine/tree/main/tests,
+    PrusaSlicer: https://github.com/prusa3d/PrusaSlicer/tree/master/tests/data,
+    SlicerTestModels: https://github.com/Ghostkeeper/SlicerTestModels)
+3. **Analytically derived values from established standards** — not LLM arithmetic,
+   but values you could look up in a textbook or standard (e.g., DH parameters,
+   robot joint limits from the manufacturer datasheet)
+4. **A human expert who has run the workflow and recorded the real output**
+
+**The cube test anti-pattern:** Writing a test that slices a cube and checks
+"layer count = height / layer_height" is circular — an LLM can make that pass
+trivially without the slicer doing any real work. Real slicers are tested on
+geometries that actually stress them: thin walls, overhangs, non-manifold meshes,
+curved surfaces. The cube is the case no slicer ever fails on and therefore
+proves nothing about correctness.
+
+**The right question before writing any test:** "Would this test catch a bug that
+a real user would experience?" If the answer is no, do not write it.
+
 ## Important Notes
 
 - NEVER commit credentials or API keys

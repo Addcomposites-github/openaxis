@@ -15,6 +15,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 import SceneManager from '../components/SceneManager';
+import ErrorBoundary from '../components/ErrorBoundary';
 import SetupPanel from '../components/panels/SetupPanel';
 import GeometryPanel from '../components/panels/GeometryPanel';
 import ToolpathPanel from '../components/panels/ToolpathPanel';
@@ -25,7 +26,7 @@ const MODE_TABS: { mode: WorkspaceMode; label: string; icon: React.ComponentType
   { mode: 'setup', label: 'Setup', icon: WrenchScrewdriverIcon },
   { mode: 'geometry', label: 'Geometry', icon: CubeIcon },
   { mode: 'toolpath', label: 'Toolpath', icon: PencilIcon },
-  { mode: 'simulation', label: 'Simulation', icon: PlayIcon },
+  { mode: 'simulation', label: 'Trajectory Preview', icon: PlayIcon },
 ];
 
 export default function WorkspaceView() {
@@ -98,16 +99,18 @@ export default function WorkspaceView() {
             {mode === 'setup' && 'Configure your robot cell: model, position, end effector, external axes'}
             {mode === 'geometry' && 'Import and position parts on the build plate'}
             {mode === 'toolpath' && 'Review and export the generated toolpath'}
-            {mode === 'simulation' && 'Simulate the robot motion along the toolpath'}
+            {mode === 'simulation' && 'Trajectory preview — kinematic replay of the robot path (not physics simulation)'}
           </div>
         </div>
 
         {/* Context Panel — right side, switches by mode */}
         <div className="w-96 bg-white border-l border-gray-200 flex flex-col overflow-hidden">
-          {mode === 'setup' && <SetupPanel />}
-          {mode === 'geometry' && <GeometryPanel />}
-          {mode === 'toolpath' && <ToolpathPanel />}
-          {mode === 'simulation' && <SimulationPanel />}
+          <ErrorBoundary>
+            {mode === 'setup' && <SetupPanel />}
+            {mode === 'geometry' && <GeometryPanel />}
+            {mode === 'toolpath' && <ToolpathPanel />}
+            {mode === 'simulation' && <SimulationPanel />}
+          </ErrorBoundary>
         </div>
       </div>
     </div>

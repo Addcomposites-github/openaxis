@@ -5,15 +5,17 @@ FastAPI server for communication between Electron frontend and Python backend.
 Provides REST API for geometry processing, toolpath generation, simulation, and robot control.
 """
 
-import logging
+import json
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.responses import StreamingResponse
 
 import sys
 
@@ -108,12 +110,11 @@ except ImportError:
     ConfigManager = None
     CONFIG_MANAGER_AVAILABLE = False
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Configure structured logging (structlog)
+from openaxis.core.logging import configure_logging, get_logger
+
+configure_logging(level="INFO", json_output=False)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Pydantic request/response models
@@ -195,17 +196,15 @@ class SimulationStartRequest(BaseModel):
 # -- Project models --
 
 class ProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     id: Optional[str] = None
     name: str = "Untitled Project"
     description: str = ""
 
-    class Config:
-        extra = "allow"
-
 
 class ProjectUpdateRequest(BaseModel):
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 # ---------------------------------------------------------------------------
@@ -254,10 +253,29 @@ class AppState:
 # FastAPI app setup
 # ---------------------------------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Application lifespan: log service availability on startup."""
+    logger.info(f"Geometry service: {'OK' if state.geometry_service else 'MOCK'}")
+    logger.info(f"Toolpath service: {'OK' if state.toolpath_service else 'MOCK'}")
+    logger.info(f"Robot service:    {'OK' if state.robot_service else 'MOCK'}")
+    logger.info(f"Simulation:       {'OK' if state.simulation_service else 'MOCK'}")
+    logger.info(f"G-code export:    {'OK' if GCODE_AVAILABLE else 'UNAVAILABLE'}")
+    logger.info(f"Material service: {'OK' if state.material_service else 'UNAVAILABLE'}")
+    logger.info(f"Workframe service: {'OK' if state.workframe_service else 'UNAVAILABLE'}")
+    logger.info(f"Validation service: {'OK' if state.validation_service else 'UNAVAILABLE'}")
+    logger.info(f"Post processor:    {'OK' if state.postprocessor_service else 'UNAVAILABLE'}")
+    logger.info(f"Toolpath editor:   {'OK' if state.toolpath_editor_service else 'UNAVAILABLE'}")
+    logger.info(f"Mesh service:      {'OK' if state.mesh_service else 'UNAVAILABLE'}")
+    logger.info(f"Config directory:  {CONFIG_DIR}")
+    yield
+
+
 app = FastAPI(
     title="OpenAxis API",
     version="0.1.0",
     description="REST API for robotic hybrid manufacturing",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -267,6 +285,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── HTTP Request Logging Middleware ────────────────────────────────────────────
+
+import time as _time
+
+
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    """Log every HTTP request with method, path, status, and duration."""
+    start = _time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (_time.perf_counter() - start) * 1000
+    logger.info(
+        "http_request",
+        method=request.method,
+        path=request.url.path,
+        status=response.status_code,
+        duration_ms=round(duration_ms, 1),
+    )
+    return response
+
 
 state = AppState()
 
@@ -292,22 +332,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         status_code=500,
         content={"status": "error", "error": "Internal server error"},
     )
-
-
-@app.on_event("startup")
-async def startup_log() -> None:
-    logger.info(f"Geometry service: {'OK' if state.geometry_service else 'MOCK'}")
-    logger.info(f"Toolpath service: {'OK' if state.toolpath_service else 'MOCK'}")
-    logger.info(f"Robot service:    {'OK' if state.robot_service else 'MOCK'}")
-    logger.info(f"Simulation:       {'OK' if state.simulation_service else 'MOCK'}")
-    logger.info(f"G-code export:    {'OK' if GCODE_AVAILABLE else 'UNAVAILABLE'}")
-    logger.info(f"Material service: {'OK' if state.material_service else 'UNAVAILABLE'}")
-    logger.info(f"Workframe service: {'OK' if state.workframe_service else 'UNAVAILABLE'}")
-    logger.info(f"Validation service: {'OK' if state.validation_service else 'UNAVAILABLE'}")
-    logger.info(f"Post processor:    {'OK' if state.postprocessor_service else 'UNAVAILABLE'}")
-    logger.info(f"Toolpath editor:   {'OK' if state.toolpath_editor_service else 'UNAVAILABLE'}")
-    logger.info(f"Mesh service:      {'OK' if state.mesh_service else 'UNAVAILABLE'}")
-    logger.info(f"Config directory:  {CONFIG_DIR}")
 
 
 # ---------------------------------------------------------------------------
@@ -418,29 +442,21 @@ async def robot_load(body: RobotLoadRequest) -> ApiResponse:
         if success:
             return ApiResponse(data={"loaded": True, "name": body.name})
         raise HTTPException(status_code=400, detail="Failed to load robot model")
-    return ApiResponse(data={"loaded": False, "mock": True})
+    raise HTTPException(
+        status_code=503,
+        detail="Robot service not available. Ensure roboticstoolbox-python is installed.",
+    )
 
 
 @app.post("/api/robot/fk")
 async def robot_fk(body: FKRequest) -> ApiResponse:
     if state.robot_service:
         data = state.robot_service.forward_kinematics(body.jointValues, tcp_offset=body.tcpOffset)
-    else:
-        import math
-        j1 = body.jointValues[0] if body.jointValues else 0
-        j2 = body.jointValues[1] if len(body.jointValues) > 1 else 0
-        reach = 2.0
-        data = {
-            "position": {
-                "x": round(reach * math.cos(j1) * math.cos(j2), 4),
-                "y": round(reach * math.sin(j1) * math.cos(j2), 4),
-                "z": round(0.78 + reach * math.sin(j2), 4),
-            },
-            "orientation": {"xaxis": [1, 0, 0], "yaxis": [0, 1, 0], "zaxis": [0, 0, 1]},
-            "valid": True,
-            "mock": True,
-        }
-    return ApiResponse(data=data)
+        return ApiResponse(data=data)
+    raise HTTPException(
+        status_code=503,
+        detail="Robot service not available. Ensure roboticstoolbox-python is installed.",
+    )
 
 
 @app.post("/api/robot/ik")
@@ -464,6 +480,65 @@ async def robot_solve_trajectory(body: TrajectoryIKRequest) -> ApiResponse:
     else:
         data = {"trajectory": [], "error": "Robot service not available"}
     return ApiResponse(data=data)
+
+
+@app.post("/api/robot/solve-trajectory-stream")
+async def robot_solve_trajectory_stream(body: TrajectoryIKRequest):
+    """SSE endpoint for progressive IK solving with per-chunk progress updates.
+
+    Solves IK in chunks and streams progress events so the frontend can
+    display a real-time progress bar during long-running IK computations.
+    The final event contains the complete result.
+    """
+    if not state.robot_service:
+        raise HTTPException(status_code=503, detail="Robot service not available")
+
+    import asyncio
+
+    async def event_stream():
+        total = len(body.waypoints)
+        chunk_size = min(500, max(1, total))
+        all_trajectory: List[List[float]] = []
+        all_reachability: List[bool] = []
+        successes = 0
+
+        for start in range(0, total, chunk_size):
+            end = min(start + chunk_size, total)
+            chunk_waypoints = body.waypoints[start:end]
+
+            result = await asyncio.to_thread(
+                state.robot_service.solve_toolpath_ik,
+                chunk_waypoints,
+                body.initialGuess,
+                body.tcpOffset,
+                chunk_start=start,
+                chunk_size=len(chunk_waypoints),
+            )
+
+            all_trajectory.extend(result.get("trajectory", []))
+            all_reachability.extend(result.get("reachability", []))
+            successes += result.get("reachableCount", 0)
+
+            progress = {
+                "type": "progress",
+                "solved": end,
+                "total": total,
+                "reachableCount": successes,
+                "percent": round(end / total * 100, 1),
+            }
+            yield f"data: {json.dumps(progress)}\n\n"
+
+        final = {
+            "type": "done",
+            "trajectory": all_trajectory,
+            "reachability": all_reachability,
+            "reachableCount": successes,
+            "totalPoints": total,
+            "reachabilityPercent": round(successes / max(total, 1) * 100, 1),
+        }
+        yield f"data: {json.dumps(final)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/robot/connect")
@@ -529,6 +604,13 @@ async def geometry_upload(body: GeometryImportRequest) -> ApiResponse:
     return await _geometry_import_handler(body)
 
 
+# Maximum upload file size: 500 MB
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024
+
+# STL magic bytes: "solid" (ASCII) or 80-byte header + uint32 (binary)
+_STL_MAGIC = b"solid"
+
+
 @app.post("/api/geometry/upload-file")
 async def geometry_upload_file(file: UploadFile = File(...)) -> ApiResponse:
     """Upload a geometry file (STL/OBJ/PLY) and return the server-side path."""
@@ -540,11 +622,28 @@ async def geometry_upload_file(file: UploadFile = File(...)) -> ApiResponse:
     if ext not in allowed:
         raise HTTPException(status_code=400, detail=f"Unsupported format: {ext}")
 
+    # Read and validate file size
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large: {len(contents)} bytes (max {MAX_UPLOAD_SIZE})",
+        )
+
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Basic magic byte validation for STL files
+    if ext == ".stl":
+        is_ascii_stl = contents[:5].lower() == _STL_MAGIC
+        is_binary_stl = len(contents) >= 84  # 80-byte header + 4-byte triangle count
+        if not is_ascii_stl and not is_binary_stl:
+            raise HTTPException(status_code=400, detail="Invalid STL file")
+
     # Save to upload directory with unique name
     import uuid
     safe_name = f"{uuid.uuid4().hex}_{file.filename}"
     dest = UPLOAD_DIR / safe_name
-    contents = await file.read()
     dest.write_bytes(contents)
 
     return ApiResponse(data={
@@ -797,12 +896,10 @@ async def simulation_create(body: SimulationCreateRequest) -> ApiResponse:
         data = state.simulation_service.create_simulation(toolpath_data, robot_config)
         return ApiResponse(data=data)
 
-    return ApiResponse(data={
-        "id": "mock_sim",
-        "status": "ready",
-        "totalTime": 0,
-        "totalWaypoints": 0,
-    })
+    raise HTTPException(
+        status_code=503,
+        detail="Simulation service not available.",
+    )
 
 
 @app.post("/api/simulation/start")
@@ -823,6 +920,156 @@ async def simulation_stop() -> ApiResponse:
     if state.simulation_service:
         state.simulation_service.stop_playback()
     return ApiResponse(data={"status": "stopped"})
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Orchestrator
+# ---------------------------------------------------------------------------
+
+
+class PipelineExecuteRequest(BaseModel):
+    geometryPath: str
+    slicingParams: Dict[str, Any] = Field(default_factory=dict)
+    robotName: str = "abb_irb6700"
+    tcpOffset: Optional[List[float]] = None
+    partPosition: Optional[List[float]] = None
+
+
+@app.post("/api/pipeline/execute")
+async def pipeline_execute(body: PipelineExecuteRequest) -> ApiResponse:
+    """Execute end-to-end pipeline: slice -> toolpath -> simulation -> IK -> trajectory.
+
+    This is the single-call workflow that chains all steps together.
+    Each step delegates to the existing service layer.
+    """
+    if not state.toolpath_service:
+        raise HTTPException(status_code=503, detail="Toolpath service not available")
+
+    import asyncio
+    from openaxis.pipeline import Pipeline, PipelineConfig
+
+    config = PipelineConfig(
+        geometry_path=body.geometryPath,
+        slicing_params=body.slicingParams,
+        robot_name=body.robotName,
+        tcp_offset=body.tcpOffset,
+        part_position=body.partPosition,
+    )
+
+    pipeline = Pipeline(
+        toolpath_service=state.toolpath_service,
+        robot_service=state.robot_service,
+        simulation_service=state.simulation_service,
+    )
+
+    result = await asyncio.to_thread(pipeline.execute, config)
+
+    # Store toolpath in state for downstream use
+    if result.toolpath_data:
+        state.toolpaths[result.toolpath_data.get("id", "pipeline")] = result.toolpath_data
+
+    return ApiResponse(data={
+        "success": result.success,
+        "toolpathData": result.toolpath_data,
+        "simulationData": result.simulation_data,
+        "trajectoryData": result.trajectory_data,
+        "errors": result.errors,
+        "timings": result.timings,
+        "stepCompleted": result.step_completed,
+        "steps": [
+            {"name": s.name, "success": s.success, "error": s.error, "duration": s.duration_s}
+            for s in result.steps
+        ],
+    })
+
+
+@app.post("/api/pipeline/execute-stream")
+async def pipeline_execute_stream(body: PipelineExecuteRequest):
+    """Execute pipeline with Server-Sent Events for real-time progress.
+
+    Sends SSE events as each pipeline step starts/completes:
+        event: progress   data: {"step": "slicing", "progress": 0.0}
+        event: progress   data: {"step": "slicing", "progress": 1.0}
+        event: complete   data: {<full PipelineResult>}
+        event: error      data: {"error": "..."}
+
+    The frontend can use EventSource or fetch + ReadableStream to consume these.
+    """
+    if not state.toolpath_service:
+        raise HTTPException(status_code=503, detail="Toolpath service not available")
+
+    import asyncio
+    import queue
+    from openaxis.pipeline import Pipeline, PipelineConfig
+
+    config = PipelineConfig(
+        geometry_path=body.geometryPath,
+        slicing_params=body.slicingParams,
+        robot_name=body.robotName,
+        tcp_offset=body.tcpOffset,
+        part_position=body.partPosition,
+    )
+
+    progress_queue: queue.Queue = queue.Queue()
+
+    def on_progress(step: str, pct: float) -> None:
+        progress_queue.put({"step": step, "progress": pct})
+
+    pipeline = Pipeline(
+        toolpath_service=state.toolpath_service,
+        robot_service=state.robot_service,
+        simulation_service=state.simulation_service,
+        progress_callback=on_progress,
+    )
+
+    async def event_stream():
+        # Run pipeline in a background thread
+        loop = asyncio.get_event_loop()
+        result_future = loop.run_in_executor(None, pipeline.execute, config)
+
+        # Stream progress events while pipeline runs
+        while not result_future.done():
+            try:
+                msg = progress_queue.get_nowait()
+                yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+            except queue.Empty:
+                pass
+            await asyncio.sleep(0.1)
+
+        # Drain remaining progress events
+        while not progress_queue.empty():
+            msg = progress_queue.get_nowait()
+            yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+
+        try:
+            result = result_future.result()
+
+            # Store toolpath in state
+            if result.toolpath_data:
+                state.toolpaths[result.toolpath_data.get("id", "pipeline")] = result.toolpath_data
+
+            final = {
+                "success": result.success,
+                "toolpathData": result.toolpath_data,
+                "simulationData": result.simulation_data,
+                "trajectoryData": result.trajectory_data,
+                "errors": result.errors,
+                "timings": result.timings,
+                "stepCompleted": result.step_completed,
+                "steps": [
+                    {"name": s.name, "success": s.success, "error": s.error, "duration": s.duration_s}
+                    for s in result.steps
+                ],
+            }
+            yield f"event: complete\ndata: {json.dumps(final)}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -932,8 +1179,7 @@ class CreateWorkFrameRequest(BaseModel):
 
 
 class UpdateWorkFrameRequest(BaseModel):
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class AlignFrameRequest(BaseModel):
@@ -1298,18 +1544,27 @@ async def geometry_undo(body: MeshUndoRequest) -> ApiResponse:
 
 @app.get("/api/monitoring/sensors")
 async def monitoring_sensors() -> ApiResponse:
-    import random
+    """Return sensor status.
+
+    No hardware is connected in the current implementation (Phase 1).
+    Hardware monitoring will be available in Phase 4 via Robot Raconteur.
+    Returns a clear unavailable status — does NOT fabricate sensor readings.
+    """
     import time as _time
     return ApiResponse(data={
         "timestamp": _time.time(),
-        "temperature": round(220 + random.uniform(-5, 5), 1),
-        "flowRate": round(10 + random.uniform(-1, 1), 2),
-        "pressure": round(5 + random.uniform(-0.5, 0.5), 2),
+        "status": "unavailable",
+        "message": "No sensors connected — hardware integration planned for Phase 4 (Robot Raconteur).",
     })
 
 
 @app.get("/api/monitoring/system")
 async def monitoring_system() -> ApiResponse:
+    """Return real host system metrics (CPU, memory, disk).
+
+    Note: networkLatency is NOT reported — the previous implementation used
+    `cpu_idle % 50` which is not a latency measurement. It has been removed.
+    """
     try:
         import psutil
         import os
@@ -1318,14 +1573,13 @@ async def monitoring_system() -> ApiResponse:
             "cpuUsage": psutil.cpu_percent(interval=0.1),
             "memoryUsage": psutil.virtual_memory().percent,
             "diskUsage": psutil.disk_usage(disk_path).percent,
-            "networkLatency": round(psutil.cpu_times().idle % 50, 1),
         })
     except ImportError:
         return ApiResponse(data={
-            "cpuUsage": 0,
-            "memoryUsage": 0,
-            "diskUsage": 0,
-            "networkLatency": 0,
+            "cpuUsage": None,
+            "memoryUsage": None,
+            "diskUsage": None,
+            "message": "psutil not installed — system metrics unavailable.",
         })
 
 
