@@ -13,13 +13,17 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from openaxis.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from openaxis.core.geometry import GeometryLoader, GeometryConverter, BoundingBox
     from openaxis.core.exceptions import GeometryError
     import trimesh
     GEOMETRY_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: Geometry modules not available: {e}")
+    logger.warning("geometry_modules_unavailable", error=str(e))
     GEOMETRY_AVAILABLE = False
 
 

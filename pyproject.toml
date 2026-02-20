@@ -36,37 +36,36 @@ classifiers = [
 
 dependencies = [
     # Core COMPAS ecosystem
-    "compas>=2.0",
-    "compas_fab>=0.28",
+    "compas>=2.0,<3.0",
+    "compas_fab>=0.28,<1.0",
     # compas_slicer removed — requires compas<2.0 (incompatible)
     # Using ORNL Slicer 2 subprocess wrapper instead
 
     # Simulation
-    "pybullet>=3.2",
-    "pybullet-industrial>=1.0",
+    "pybullet>=3.2,<4.0",
+    "pybullet-industrial>=1.0,<2.0",
 
     # Milling toolpath generation
     "opencamlib>=2023.1",
 
     # Geometry processing
-    "trimesh>=4.0",
-    "numpy>=1.24",
-    "scipy>=1.10",
-    
-    # Configuration & utilities
-    "pyyaml>=6.0",
-    "jsonschema>=4.0",
-    "pydantic>=2.0",
-    "click>=8.0",
-    "rich>=13.0",
-    
-    # Backend server
-    "fastapi>=0.100",
-    "uvicorn[standard]>=0.20",
+    "trimesh>=4.0,<5.0",
+    "numpy>=1.24,<3.0",
+    "scipy>=1.10,<2.0",
 
-    # Async support
-    "aiofiles>=23.0",
-    "asyncio-mqtt>=0.16",
+    # Configuration & utilities
+    "pyyaml>=6.0,<7.0",
+    "jsonschema>=4.0,<5.0",
+    "pydantic>=2.0,<3.0",
+    "click>=8.0,<9.0",
+    "rich>=13.0,<14.0",
+
+    # Backend server
+    "fastapi>=0.100,<1.0",
+    "uvicorn[standard]>=0.20,<1.0",
+
+    # Structured logging
+    "structlog>=24.0,<26.0",
 ]
 
 [project.optional-dependencies]
@@ -75,6 +74,8 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.21",
     "pytest-xdist>=3.0",
+    "pytest-benchmark>=4.0",
+    "httpx>=0.25",
     "black>=23.0",
     "isort>=5.12",
     "flake8>=6.0",

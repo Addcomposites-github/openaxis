@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from openaxis.core.exceptions import PluginError
+from openaxis.core.logging import get_logger
+
+_logger = get_logger(__name__)
 
 
 class ProcessType(Enum):
@@ -178,7 +181,7 @@ class PluginRegistry:
 
             except (ImportError, PluginError) as e:
                 # Log warning but continue discovering
-                print(f"Warning: Failed to load plugin from {module_path}: {e}")
+                _logger.warning("plugin_load_failed", module=str(module_path), error=str(e))
 
         return discovered
 

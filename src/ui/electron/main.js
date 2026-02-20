@@ -7,10 +7,30 @@ let pythonProcess;
 
 // Python backend management
 function startPythonBackend() {
-  const pythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
-  const backendScript = path.join(__dirname, '..', '..', 'backend', 'server.py');
+  const isPackaged = app.isPackaged;
 
-  pythonProcess = spawn(pythonExecutable, [backendScript]);
+  let command, args;
+
+  if (isPackaged) {
+    // Packaged mode: use PyInstaller-frozen backend from extraResources
+    const resourcePath = process.resourcesPath;
+    const backendExe = process.platform === 'win32'
+      ? path.join(resourcePath, 'backend', 'openaxis-server.exe')
+      : path.join(resourcePath, 'backend', 'openaxis-server');
+
+    command = backendExe;
+    args = [];
+    console.log(`[OpenAxis] Starting packaged backend: ${command}`);
+  } else {
+    // Development mode: run server.py with Python
+    command = process.platform === 'win32' ? 'python' : 'python3';
+    args = [path.join(__dirname, '..', '..', 'backend', 'server.py')];
+    console.log(`[OpenAxis] Starting dev backend: ${command} ${args.join(' ')}`);
+  }
+
+  pythonProcess = spawn(command, args, {
+    env: { ...process.env, OPENAXIS_PACKAGED: isPackaged ? '1' : '0' },
+  });
 
   pythonProcess.stdout.on('data', (data) => {
     console.log(`Python Backend: ${data}`);
@@ -22,6 +42,10 @@ function startPythonBackend() {
 
   pythonProcess.on('close', (code) => {
     console.log(`Python backend exited with code ${code}`);
+  });
+
+  pythonProcess.on('error', (err) => {
+    console.error(`Failed to start backend: ${err.message}`);
   });
 }
 

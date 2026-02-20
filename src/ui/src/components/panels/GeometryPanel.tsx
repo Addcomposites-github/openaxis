@@ -3,6 +3,7 @@
  * Reads/writes to workspaceStore geometry state.
  */
 import { useState, useRef, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
@@ -30,6 +31,7 @@ import SlicingStrategySelector, { type SlicingStrategy } from '../SlicingStrateg
 import MeshOperationsPanel from '../MeshOperationsPanel';
 import { centerOnPlate, checkBuildVolume, getDimensions, formatDimensions, computePlateOffsetAfterRotation } from '../../utils/geometryUtils';
 import { generateToolpath, uploadGeometryFile, checkHealth } from '../../api/toolpath';
+import { executePipeline } from '../../api/pipeline';
 
 export default function GeometryPanel() {
   const parts = useWorkspaceStore((s) => s.geometryParts);
@@ -43,10 +45,17 @@ export default function GeometryPanel() {
   const setToolpathData = useWorkspaceStore((s) => s.setToolpathData);
   const toolpathStale = useWorkspaceStore((s) => s.toolpathStale);
   const setMode = useWorkspaceStore((s) => s.setMode);
+  const setTrajectory = useWorkspaceStore((s) => s.setTrajectory);
+  const setSimState = useWorkspaceStore((s) => s.setSimState);
+  const setSimMode = useWorkspaceStore((s) => s.setSimMode);
+  const setIKStatus = useWorkspaceStore((s) => s.setIKStatus);
+  const setJointTrajectory = useWorkspaceStore((s) => s.setJointTrajectory);
+  const setReachability = useWorkspaceStore((s) => s.setReachability);
+  const cellSetup = useWorkspaceStore((s) => s.cellSetup);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [notification, setNotification] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isPipelineRunning, setIsPipelineRunning] = useState(false);
   const [useAdvancedSlicing, setUseAdvancedSlicing] = useState(false);
   const [slicingParams, setSlicingParams] = useState<SlicingParameters>({
     layerHeight: 2.0,
@@ -96,10 +105,10 @@ export default function GeometryPanel() {
     const fileName = file.name;
     const fileExtension = fileName.split('.').pop()?.toLowerCase();
 
-    setNotification(`Loading ${fileName}...`);
+    toast.loading(`Loading ${fileName}...`, { id: 'geo-load' });
 
     if (fileExtension === 'step' || fileExtension === 'stp') {
-      setNotification('STEP files require backend processing. Using placeholder for now.');
+      toast('STEP files require backend processing. Using placeholder.', { id: 'geo-load', icon: '\u26A0\uFE0F' });
       const newPart: GeometryPartData = {
         id: Date.now().toString(),
         name: fileName.replace(/\.[^/.]+$/, '') + ' (STEP)',
@@ -109,7 +118,6 @@ export default function GeometryPanel() {
         dimensions: { x: 50, y: 50, z: 50 },
       };
       addGeometryPart(newPart);
-      setTimeout(() => setNotification(null), 3000);
       return;
     }
 
@@ -160,20 +168,18 @@ export default function GeometryPanel() {
           setSelectedPartId(partId);
 
           if (volumeCheck.valid) {
-            setNotification(`${fileName} loaded! ${formatDimensions(dimensions)}`);
+            toast.success(`${fileName} loaded! ${formatDimensions(dimensions)}`, { id: 'geo-load' });
           } else {
-            setNotification(`Warning: ${volumeCheck.errors[0]}`);
+            toast(`Warning: ${volumeCheck.errors[0]}`, { id: 'geo-load', icon: '\u26A0\uFE0F' });
           }
         } else {
-          setNotification(`Error: Could not load geometry from ${fileName}`);
+          toast.error(`Could not load geometry from ${fileName}`, { id: 'geo-load' });
         }
-        setTimeout(() => setNotification(null), 4000);
       },
       undefined,
       (error) => {
         console.error('Error loading file:', error);
-        setNotification(`Error loading ${fileName}`);
-        setTimeout(() => setNotification(null), 3000);
+        toast.error(`Error loading ${fileName}`, { id: 'geo-load' });
       }
     );
 
@@ -201,40 +207,36 @@ export default function GeometryPanel() {
       updateGeometryPart(selectedPart, {
         position: { x: 0, y: yOffset, z: 0 },
       });
-      setNotification('Part placed on build plate');
+      toast.success('Part placed on build plate');
     } else {
       // No rotation: reset to origin restores import-time alignment
       updateGeometryPart(selectedPart, {
         position: { x: 0, y: 0, z: 0 },
         rotation: { x: 0, y: 0, z: 0 },
       });
-      setNotification('Part centered on build plate');
+      toast.success('Part centered on build plate');
     }
-    setTimeout(() => setNotification(null), 2000);
   };
 
   const handleGenerateToolpath = async () => {
     const part = parts.find((p) => p.id === selectedPart);
     if (!part) {
-      setNotification('No part selected. Please select a geometry part.');
-      setTimeout(() => setNotification(null), 3000);
+      toast.error('No part selected. Please select a geometry part.');
       return;
     }
 
     if (!part.fileUrl) {
-      setNotification('Selected part has no geometry. Please import an STL or OBJ file.');
-      setTimeout(() => setNotification(null), 3000);
+      toast.error('Selected part has no geometry. Please import an STL or OBJ file.');
       return;
     }
 
     setIsGenerating(true);
-    setNotification('Checking backend connection...');
+    const toastId = toast.loading('Checking backend connection...');
 
     try {
       const isHealthy = await checkHealth();
       if (!isHealthy) {
-        setNotification('Backend not running. Start: python src/backend/server.py');
-        setTimeout(() => setNotification(null), 5000);
+        toast.error('Backend not running. Start: python src/backend/server.py', { id: toastId });
         setIsGenerating(false);
         return;
       }
@@ -242,26 +244,24 @@ export default function GeometryPanel() {
       // Get the raw file from our module-level store
       const rawFile = getGeometryFile(part.id);
       if (!rawFile) {
-        setNotification('No geometry file available for upload. Please re-import.');
-        setTimeout(() => setNotification(null), 3000);
+        toast.error('No geometry file available for upload. Please re-import.', { id: toastId });
         setIsGenerating(false);
         return;
       }
 
-      setNotification('Uploading geometry to backend...');
+      toast.loading('Uploading geometry to backend...', { id: toastId });
       const geometryPath = await uploadGeometryFile(rawFile);
 
       // Ground check — position.y is height (Y-up convention in store).
       // If the part has been dragged below the plate surface, refuse to slice.
       const pos = part.position || { x: 0, y: 0, z: 0 };
       if (pos.y < -1) { // small tolerance
-        setNotification('Cannot slice: part is below the build plate. Move it above the plate first.');
-        setTimeout(() => setNotification(null), 5000);
+        toast.error('Cannot slice: part is below the build plate. Move it above the plate first.', { id: toastId });
         setIsGenerating(false);
         return;
       }
 
-      setNotification('Generating toolpath (ORNL Slicer 2)...');
+      toast.loading('Generating toolpath (ORNL Slicer 2)...', { id: toastId });
       // Convert store position (Y-up mm) to slicer position (Z-up mm).
       // Scene/store: X=left/right, Y=height, Z=depth
       // Slicer:      X=left/right, Y=depth,  Z=height
@@ -313,25 +313,173 @@ export default function GeometryPanel() {
       setToolpathData(toolpathData);
       useProjectStore.getState().setWorkspaceToolpath(toolpathData);
 
-      setNotification(
-        `Toolpath generated (ORNL Slicer 2)! ${toolpathData.totalLayers} layers, ${toolpathData.statistics.totalSegments} segments`
+      toast.success(
+        `Toolpath generated! ${toolpathData.totalLayers} layers, ${toolpathData.statistics.totalSegments} segments`,
+        { id: toastId },
       );
 
-      setTimeout(() => {
-        setNotification('Opening toolpath editor...');
-        setTimeout(() => {
-          setNotification(null);
-          setMode('toolpath');
-        }, 1000);
-      }, 2000);
+      setTimeout(() => setMode('toolpath'), 1500);
     } catch (error: any) {
       // Extract the actual backend error message from Axios response
       const backendError = error.response?.data?.error || error.message || 'Failed to generate toolpath';
       console.error('Toolpath generation error:', backendError, error.response?.data);
-      setNotification(`Error: ${backendError}`);
-      setTimeout(() => setNotification(null), 8000);
+      toast.error(backendError, { id: toastId });
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  /**
+   * Run the full manufacturing pipeline: slice -> simulate -> IK solve.
+   * Uses the backend pipeline orchestrator endpoint for a single-call workflow.
+   * On success, populates toolpath, trajectory, and IK data in the store
+   * and transitions directly to simulation mode.
+   */
+  const handleRunPipeline = async () => {
+    const part = parts.find((p) => p.id === selectedPart);
+    if (!part) {
+      toast.error('No part selected. Please select a geometry part.');
+      return;
+    }
+
+    if (!part.fileUrl) {
+      toast.error('Selected part has no geometry. Please import an STL or OBJ file.');
+      return;
+    }
+
+    setIsPipelineRunning(true);
+    const toastId = toast.loading('Checking backend connection...');
+
+    try {
+      const isHealthy = await checkHealth();
+      if (!isHealthy) {
+        toast.error('Backend not running. Start: python src/backend/server.py', { id: toastId });
+        setIsPipelineRunning(false);
+        return;
+      }
+
+      // Upload geometry
+      const rawFile = getGeometryFile(part.id);
+      if (!rawFile) {
+        toast.error('No geometry file available for upload. Please re-import.', { id: toastId });
+        setIsPipelineRunning(false);
+        return;
+      }
+
+      toast.loading('Uploading geometry...', { id: toastId });
+      const geometryPath = await uploadGeometryFile(rawFile);
+
+      // Part position: convert store Y-up to slicer Z-up
+      const pos = part.position || { x: 0, y: 0, z: 0 };
+      if (pos.y < -1) {
+        toast.error('Cannot process: part is below the build plate.', { id: toastId });
+        setIsPipelineRunning(false);
+        return;
+      }
+      const slicerPos = [pos.x, pos.z, pos.y]; // Y-up -> Z-up
+
+      // Build slicing params (same as handleGenerateToolpath)
+      const apiParams = useAdvancedSlicing
+        ? {
+            layerHeight: advancedParams.layerHeight,
+            extrusionWidth: advancedParams.lineWidth,
+            wallCount: advancedParams.wallCount,
+            infillDensity: advancedParams.infillDensity / 100,
+            infillPattern: advancedParams.infillPattern,
+            processType: slicingParams.processType,
+            wallWidth: advancedParams.wallWidth,
+            printSpeed: advancedParams.printSpeed,
+            seamMode: advancedParams.seamMode,
+            seamShape: advancedParams.seamShape,
+            seamAngle: advancedParams.seamAngle,
+            travelSpeed: advancedParams.travelSpeed,
+            zHop: advancedParams.zHop,
+            retractDistance: advancedParams.retractDistance,
+            retractSpeed: advancedParams.retractSpeed,
+            leadInDistance: advancedParams.leadInDistance,
+            leadInAngle: advancedParams.leadInAngle,
+            leadOutDistance: advancedParams.leadOutDistance,
+            leadOutAngle: advancedParams.leadOutAngle,
+          }
+        : slicingParams;
+
+      const finalParams = {
+        ...apiParams,
+        strategy: slicingStrategy,
+        ...(slicingStrategy === 'angled' ? { sliceAngle } : {}),
+        supportEnabled,
+        supportThreshold,
+      };
+
+      // TCP offset from cell setup
+      const tcpOffset = cellSetup.endEffector.offset;
+
+      toast.loading('Running pipeline: slice → simulate → IK solve...', { id: toastId });
+
+      const result = await executePipeline({
+        geometryPath,
+        slicingParams: finalParams,
+        robotName: cellSetup.robot.model || 'abb_irb6700',
+        tcpOffset,
+        partPosition: slicerPos,
+      });
+
+      // Populate stores with pipeline results
+      if (result.toolpathData) {
+        setToolpathData(result.toolpathData);
+        useProjectStore.getState().setWorkspaceToolpath(result.toolpathData);
+      }
+
+      if (result.simulationData) {
+        const traj = result.simulationData.trajectory;
+        if (traj) {
+          setTrajectory(traj);
+          const totalTime = traj.totalTime || result.simulationData.totalTime || 0;
+          setSimState({ totalTime, currentTime: 0, speed: 1 });
+          setSimMode('toolpath');
+        }
+      }
+
+      if (result.trajectoryData) {
+        if (result.trajectoryData.trajectory) {
+          setJointTrajectory(result.trajectoryData.trajectory);
+        }
+        if (result.trajectoryData.reachability) {
+          setReachability(result.trajectoryData.reachability);
+        }
+        setIKStatus('ready');
+      } else {
+        // Pipeline ran but IK wasn't solved — let SimulationPanel auto-trigger it
+        setIKStatus('idle');
+      }
+
+      // Build summary message
+      const steps = result.steps || [];
+      const completedSteps = steps.filter((s: any) => s.success).map((s: any) => s.name);
+      const failedSteps = steps.filter((s: any) => !s.success).map((s: any) => s.name);
+
+      if (failedSteps.length > 0) {
+        toast.success(
+          `Pipeline partial: ${completedSteps.join(' → ')} done. Failed: ${failedSteps.join(', ')}`,
+          { id: toastId, duration: 5000 },
+        );
+      } else {
+        const layerCount = result.toolpathData?.totalLayers || 0;
+        const reachPct = result.trajectoryData?.reachabilityPercent?.toFixed(1) || '—';
+        toast.success(
+          `Pipeline complete! ${layerCount} layers, ${reachPct}% reachable`,
+          { id: toastId, duration: 5000 },
+        );
+      }
+
+      // Transition to simulation mode
+      setTimeout(() => setMode('simulation'), 1000);
+    } catch (error: any) {
+      const backendError = error.response?.data?.error || error.message || 'Pipeline failed';
+      console.error('Pipeline execution error:', backendError, error.response?.data);
+      toast.error(backendError, { id: toastId });
+    } finally {
+      setIsPipelineRunning(false);
     }
   };
 
@@ -361,13 +509,6 @@ export default function GeometryPanel() {
         onChange={handleFileChange}
         className="hidden"
       />
-
-      {/* Notification */}
-      {notification && (
-        <div className="mx-4 mt-3 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg">
-          {notification}
-        </div>
-      )}
 
       {/* Viewport Toolbar (floating) */}
       <div className="p-4 border-b border-gray-200">
@@ -634,12 +775,12 @@ export default function GeometryPanel() {
             <SlicingParametersPanel parameters={slicingParams} onChange={setSlicingParams} />
           )}
         </div>
-        <div className="border-t border-gray-200 p-4 bg-gray-50">
+        <div className="border-t border-gray-200 p-4 bg-gray-50 space-y-2">
           <button
             onClick={handleGenerateToolpath}
-            disabled={isGenerating || !selectedPart}
+            disabled={isGenerating || isPipelineRunning || !selectedPart}
             className={`w-full flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
-              isGenerating || !selectedPart
+              isGenerating || isPipelineRunning || !selectedPart
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                 : toolpathStale
                   ? 'bg-amber-500 text-white hover:bg-amber-600'
@@ -651,8 +792,24 @@ export default function GeometryPanel() {
               {isGenerating ? 'Generating...' : toolpathStale ? 'Regenerate Toolpath' : 'Generate Toolpath'}
             </span>
           </button>
+          <button
+            onClick={handleRunPipeline}
+            disabled={isGenerating || isPipelineRunning || !selectedPart}
+            className={`w-full flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
+              isGenerating || isPipelineRunning || !selectedPart
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-green-600 text-white hover:bg-green-700'
+            }`}
+          >
+            <ChevronDoubleRightIcon className="w-5 h-5" />
+            <span className="text-sm font-medium">
+              {isPipelineRunning ? 'Running Pipeline...' : 'Generate & Simulate'}
+            </span>
+          </button>
           <p className="text-xs text-center mt-2">
-            {toolpathStale ? (
+            {isPipelineRunning ? (
+              <span className="text-green-600 font-medium">Running: slice → simulate → IK solve</span>
+            ) : toolpathStale ? (
               <span className="text-amber-600 font-medium">Part moved — toolpath needs regeneration</span>
             ) : selectedPart ? (
               <span className="text-gray-500">Slice geometry into manufacturing path</span>

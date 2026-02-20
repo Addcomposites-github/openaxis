@@ -14,6 +14,9 @@ from compas_robots import Configuration
 
 from openaxis.processes.base import ProcessParameters, ProcessPlugin, ProcessType
 from openaxis.slicing.toolpath import Toolpath, ToolpathType
+from openaxis.core.logging import get_logger
+
+_logger = get_logger(__name__)
 
 
 @dataclass
@@ -208,10 +211,10 @@ class WAAMProcess(ProcessPlugin):
         - Wire feeder check
         - Power source initialization
         """
-        print(f"Starting {self.params.shielding_gas} flow at {self.params.gas_flow_rate} L/min...")
-        print("Checking wire feeder...")
-        print(f"Setting arc parameters: {self.params.arc_voltage}V, {self.params.arc_current}A...")
-        print("Power source ready")
+        _logger.info("waam_pre_process", gas=self.params.shielding_gas, flow_rate=self.params.gas_flow_rate)
+        _logger.info("waam_wire_feeder_check")
+        _logger.info("waam_arc_params", voltage=self.params.arc_voltage, current=self.params.arc_current)
+        _logger.info("waam_power_source_ready")
 
     def post_process(self) -> None:
         """
@@ -222,9 +225,9 @@ class WAAMProcess(ProcessPlugin):
         - Gas flow stop
         - Part cooling
         """
-        print("Terminating arc...")
-        print("Stopping gas flow...")
-        print("Part cooling...")
+        _logger.info("waam_post_process", step="terminating_arc")
+        _logger.info("waam_post_process", step="stopping_gas_flow")
+        _logger.info("waam_post_process", step="part_cooling")
 
     def calculate_deposition_rate(self) -> float:
         """

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
 import WorkspaceView from './pages/WorkspaceView';
@@ -19,6 +20,15 @@ function App() {
 
   return (
     <Router>
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          duration: 4000,
+          style: { fontSize: '14px' },
+          success: { duration: 3000 },
+          error: { duration: 6000 },
+        }}
+      />
       <Layout>
         <ErrorBoundary>
           <Routes>
