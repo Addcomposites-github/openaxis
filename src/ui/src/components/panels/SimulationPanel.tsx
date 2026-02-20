@@ -4,6 +4,7 @@
  * Reads/writes to workspaceStore simulation state.
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import toast from 'react-hot-toast';
 import {
   PlayIcon,
   PauseIcon,
@@ -79,7 +80,39 @@ export default function SimulationPanel() {
   const backendConnectedRef = useRef(false);
   const ikComputingRef = useRef(false);
   const trajectoryLoadedRef = useRef(false);
+  const ikAbortRef = useRef(false);
   backendConnectedRef.current = backendConnected;
+
+  // Elapsed time for IK computation
+  const [ikElapsedMs, setIkElapsedMs] = useState(0);
+  const ikTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startIkTimer = useCallback(() => {
+    setIkElapsedMs(0);
+    if (ikTimerRef.current) clearInterval(ikTimerRef.current);
+    const t0 = performance.now();
+    ikTimerRef.current = setInterval(() => {
+      setIkElapsedMs(Math.round(performance.now() - t0));
+    }, 200);
+  }, []);
+
+  const stopIkTimer = useCallback(() => {
+    if (ikTimerRef.current) {
+      clearInterval(ikTimerRef.current);
+      ikTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => { stopIkTimer(); };
+  }, [stopIkTimer]);
+
+  const handleCancelIK = useCallback(() => {
+    ikAbortRef.current = true;
+    ikComputingRef.current = false;
+    stopIkTimer();
+    setIKStatus('idle');
+  }, [stopIkTimer, setIKStatus]);
 
   // Init backend connection and load robot config
   useEffect(() => {
@@ -196,6 +229,8 @@ export default function SimulationPanel() {
 
     const computeIK = async () => {
       setIKStatus('computing');
+      ikAbortRef.current = false;
+      startIkTimer();
 
       // Transform all waypoints to robot base frame (meters, Z-up)
       const robotPositionScene: [number, number, number] = [
@@ -244,6 +279,10 @@ export default function SimulationPanel() {
           console.log(`[IK] Solving ${totalWps} waypoints via backend (roboticstoolbox-python, Levenberg-Marquardt)...`);
           const result = await solveTrajectoryIK(positions, undefined, tcpOffset);
           const dt = performance.now() - t0;
+          stopIkTimer();
+
+          // Check if cancelled during solve
+          if (ikAbortRef.current) return;
 
           // Pad trajectory with home position at start and end
           const home = cellSetup.robot.homePosition;
@@ -283,6 +322,9 @@ export default function SimulationPanel() {
         console.log(`[IK] Using local fallback IK for ${totalWps} waypoints (tool=${toolLength.toFixed(3)}m)...`);
         const result = solveTrajectoryIKLocal(positions, toolLength);
         const dt = performance.now() - t0;
+        stopIkTimer();
+
+        if (ikAbortRef.current) return;
 
         if (result.reachableCount === 0) {
           // Stub returned all-zeros — treat as failure, don't freeze the robot
@@ -303,6 +345,8 @@ export default function SimulationPanel() {
         );
       } catch (e) {
         console.error('[IK] All IK solvers failed:', e);
+        toast.error('IK solver failed. Check that the toolpath is within robot reach.');
+        stopIkTimer();
         setIKStatus('failed');
         ikComputingRef.current = false;
       }
@@ -415,7 +459,7 @@ export default function SimulationPanel() {
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b border-gray-200">
-        <h3 className="text-sm font-semibold text-gray-900">Simulation Status</h3>
+        <h3 className="text-sm font-semibold text-gray-900">Trajectory Preview</h3>
         {robotConfig && <p className="text-xs text-gray-500 mt-1">{robotConfig.name}</p>}
       </div>
 
@@ -425,8 +469,18 @@ export default function SimulationPanel() {
           <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-600 text-white">Toolpath Mode</span>
         )}
         {ikStatus === 'computing' && (
-          <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-500 text-white animate-pulse">
-            Computing IK{trajectory ? ` (${trajectory.waypoints.length} pts)` : ''}...
+          <span className="inline-flex items-center gap-1.5">
+            <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-500 text-white animate-pulse">
+              Computing IK{trajectory ? ` (${trajectory.waypoints.length} pts)` : ''}
+              {ikElapsedMs > 0 ? ` — ${(ikElapsedMs / 1000).toFixed(1)}s` : '...'}
+            </span>
+            <button
+              onClick={handleCancelIK}
+              className="px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 hover:bg-yellow-200 transition-colors"
+              title="Cancel IK computation"
+            >
+              Cancel
+            </button>
           </span>
         )}
         {ikStatus === 'ready' && (
@@ -664,11 +718,11 @@ export default function SimulationPanel() {
           <div className="space-y-2">
             <div className="flex justify-between items-center text-sm">
               <span className="text-gray-600">Temperature</span>
-              <span className="font-medium text-gray-900">220&deg;C</span>
+              <span className="font-medium text-gray-400 italic">No sensor connected</span>
             </div>
             <div className="flex justify-between items-center text-sm">
               <span className="text-gray-600">Flow Rate</span>
-              <span className="font-medium text-gray-900">10 mm&sup3;/s</span>
+              <span className="font-medium text-gray-400 italic">No sensor connected</span>
             </div>
             <div className="flex justify-between items-center text-sm">
               <span className="text-gray-600">Layer</span>
@@ -677,6 +731,9 @@ export default function SimulationPanel() {
               </span>
             </div>
           </div>
+          <p className="text-xs text-gray-400 mt-2">
+            Hardware monitoring available in Phase 4 (Robot Raconteur integration).
+          </p>
         </div>
       </div>
 
