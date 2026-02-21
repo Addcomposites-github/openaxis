@@ -143,14 +143,16 @@ class FKRequest(BaseModel):
 
 class IKRequest(BaseModel):
     targetPosition: List[float] = Field(min_length=3, max_length=3)
-    targetOrientation: Optional[List[float]] = None
+    targetOrientation: Optional[List[float]] = None  # [rx, ry, rz] degrees ZYX RPY
     initialGuess: Optional[List[float]] = None
+    tcpOffset: Optional[List[float]] = None  # [x,y,z,rx,ry,rz] meters+degrees, in flange frame
 
 
 class TrajectoryIKRequest(BaseModel):
     waypoints: List[List[float]] = Field(min_length=1)
     initialGuess: Optional[List[float]] = None
-    tcpOffset: Optional[List[float]] = None  # [x, y, z, rx, ry, rz] in meters
+    tcpOffset: Optional[List[float]] = None  # [x,y,z,rx,ry,rz] meters+degrees, in flange frame
+    normals: Optional[List[List[float]]] = None  # per-waypoint slicing plane normals [nx,ny,nz], robot base frame
     maxWaypoints: int = 0  # Deprecated, ignored — full solve or use chunkStart/chunkSize
     chunkStart: int = 0     # Start index for chunked solving (0 = full batch)
     chunkSize: int = 0      # Number of waypoints to solve (0 = all)
@@ -463,7 +465,8 @@ async def robot_fk(body: FKRequest) -> ApiResponse:
 async def robot_ik(body: IKRequest) -> ApiResponse:
     if state.robot_service:
         data = state.robot_service.inverse_kinematics(
-            body.targetPosition, body.targetOrientation, body.initialGuess
+            body.targetPosition, body.targetOrientation, body.initialGuess,
+            tcp_offset=body.tcpOffset,
         )
     else:
         data = {"solution": None, "valid": False, "error": "Robot service not available"}
@@ -476,6 +479,7 @@ async def robot_solve_trajectory(body: TrajectoryIKRequest) -> ApiResponse:
         data = state.robot_service.solve_toolpath_ik(
             body.waypoints, body.initialGuess, body.tcpOffset,
             chunk_start=body.chunkStart, chunk_size=body.chunkSize,
+            normals=body.normals,
         )
     else:
         data = {"trajectory": [], "error": "Robot service not available"}
@@ -505,6 +509,7 @@ async def robot_solve_trajectory_stream(body: TrajectoryIKRequest):
         for start in range(0, total, chunk_size):
             end = min(start + chunk_size, total)
             chunk_waypoints = body.waypoints[start:end]
+            chunk_normals = body.normals[start:end] if body.normals else None
 
             result = await asyncio.to_thread(
                 state.robot_service.solve_toolpath_ik,
@@ -513,6 +518,7 @@ async def robot_solve_trajectory_stream(body: TrajectoryIKRequest):
                 body.tcpOffset,
                 chunk_start=start,
                 chunk_size=len(chunk_waypoints),
+                normals=chunk_normals,
             )
 
             all_trajectory.extend(result.get("trajectory", []))

@@ -17,6 +17,7 @@ Template variables available in event hooks:
 """
 
 import datetime
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
@@ -111,6 +112,16 @@ class PointData:
     time_estimate: float = 0.0
     is_first_in_segment: bool = False
     is_last_in_segment: bool = False
+    # Slicing plane normal in slicer frame (Z-up mm). [0,0,1] for planar slicing.
+    # This is the "up" direction of the print layer — the tool Z-axis must align
+    # with this normal so the robot approaches perpendicular to the print plane.
+    # IMPORTANT: Currently hardcoded to [0,0,1] for all planar slicing operations.
+    # This assumption is only valid when the robot base frame Z-axis is parallel to
+    # the build plate normal (i.e. robot standing on a flat floor, build plate flat).
+    # For tilted build plates, external-axis positioners, or non-planar slicers the
+    # normal must come from the actual slicer plane geometry. Do NOT change the
+    # IK target orientation without updating this field to carry the real normal.
+    layer_normal: Tuple[float, float, float] = field(default_factory=lambda: (0.0, 0.0, 1.0))
 
     def template_vars(self, tool_name: str = "tool0") -> Dict[str, Any]:
         return {
@@ -196,6 +207,76 @@ class PostProcessorBase(ABC):
         """Code injected at layer transitions."""
         return [self.comment(f"Layer {layer}")]
 
+    # ── Normal → frame conversion ────────────────────────────────────
+
+    @staticmethod
+    def normal_to_zyx_euler(normal: Tuple[float, float, float]) -> Tuple[float, float, float]:
+        """Convert a slicing plane normal vector to ZYX Euler angles (degrees).
+
+        The normal defines the tool Z-axis direction (approach direction). We build
+        a rotation matrix with Z = -normal (tool pointing into the surface), then
+        extract ZYX Euler angles (A, B, C for KUKA; W, P, R for Fanuc; rz, ry, rx
+        for the generic representation used in RAPID quaternion conversion).
+
+        HARDCODED CAVEAT: For planar Z-up slicing, normal = [0,0,1] always, giving
+        A=0, B=180, C=0 (or equivalent). This is hardcoded and only correct when:
+          1. The build plate is horizontal (parallel to the robot base XY plane)
+          2. The robot base Z-axis is vertical (robot standing on a flat floor)
+        For tilted build plates, positioners, or non-planar slicers the normal must
+        come from the actual slicer plane geometry. Do NOT assume [0,0,1] in those cases.
+
+        Returns: (rz_deg, ry_deg, rx_deg) — ZYX Euler angles in degrees.
+        Equivalent to KUKA A, B, C convention.
+
+        Reference: Siciliano et al., "Robotics: Modelling, Planning and Control",
+        Springer 2010, §2.7 (Euler angle extraction from rotation matrix).
+        """
+        nx, ny, nz = normal
+        norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if norm < 1e-9:
+            return (0.0, 180.0, 0.0)  # Degenerate — default tool-down
+        nx, ny, nz = nx / norm, ny / norm, nz / norm
+
+        # Tool Z-axis = -normal (tool approaches from above)
+        tz_x, tz_y, tz_z = -nx, -ny, -nz
+
+        # Pick an arbitrary X that is not collinear with tool_z
+        if abs(tz_x) < 0.9:
+            arb = (1.0, 0.0, 0.0)
+        else:
+            arb = (0.0, 1.0, 0.0)
+
+        # tool_y = tool_z × arb  (normalized)
+        ty_x = tz_y * arb[2] - tz_z * arb[1]
+        ty_y = tz_z * arb[0] - tz_x * arb[2]
+        ty_z = tz_x * arb[1] - tz_y * arb[0]
+        ty_len = math.sqrt(ty_x * ty_x + ty_y * ty_y + ty_z * ty_z)
+        ty_x, ty_y, ty_z = ty_x / ty_len, ty_y / ty_len, ty_z / ty_len
+
+        # tool_x = tool_y × tool_z  (normalized)
+        tx_x = ty_y * tz_z - ty_z * tz_y
+        tx_y = ty_z * tz_x - ty_x * tz_z
+        tx_z = ty_x * tz_y - ty_y * tz_x
+
+        # Rotation matrix R = [tool_x | tool_y | tool_z] (columns)
+        # R[row][col]: R[0][0]=tx_x, R[1][0]=tx_y, R[2][0]=tx_z, etc.
+        r00, r10, r20 = tx_x, tx_y, tx_z
+        r01, r11, r21 = ty_x, ty_y, ty_z
+        r02, r12, r22 = tz_x, tz_y, tz_z
+
+        # ZYX Euler extraction: rz (A), ry (B), rx (C)
+        # Reference: Siciliano et al., §2.7
+        ry = math.atan2(-r20, math.sqrt(r00 * r00 + r10 * r10))
+        if abs(math.cos(ry)) > 1e-6:
+            rz = math.atan2(r10, r00)
+            rx = math.atan2(r21, r22)
+        else:
+            # Gimbal lock
+            rz = math.atan2(-r01, r11)
+            rx = 0.0
+
+        return (math.degrees(rz), math.degrees(ry), math.degrees(rx))
+
     # ── Hook expansion ────────────────────────────────────────────────
 
     def _expand_hook(self, hook_template: str, pt: Optional[PointData] = None) -> List[str]:
@@ -243,6 +324,14 @@ class PostProcessorBase(ABC):
             seg_speed = seg.get('speed', self.config.default_speed)
             points = seg.get('points', [])
             extrusion_rate = seg.get('extrusionRate', 1.0)
+            # Slicing plane normal for this segment.
+            # HARDCODED CAVEAT: planar slicer always produces [0,0,1] (world Z-up).
+            # This is only valid when the build plate is flat and the robot base Z
+            # is parallel to the build plate normal. For tilted build plates, external
+            # axes (positioners), angled slicing, or any non-planar strategy this
+            # value must come from the slicer's own plane geometry — not assumed.
+            # Future work: non-planar slicers must populate seg['normal'] explicitly.
+            seg_normal: Tuple[float, float, float] = tuple(seg.get('normal', [0.0, 0.0, 1.0]))  # type: ignore[assignment]
 
             if not points:
                 continue
@@ -269,6 +358,7 @@ class PostProcessorBase(ABC):
                     speed=seg_speed,
                     segment_type=seg_type,
                     layer_index=seg_layer,
+                    layer_normal=seg_normal,
                 )
                 self._lines.extend(self.process_on_code(first_pt))
                 self._lines.extend(self._expand_hook(self.config.hooks.process_on, first_pt))
@@ -291,6 +381,7 @@ class PostProcessorBase(ABC):
                     time_estimate=self._time_estimate,
                     is_first_in_segment=(pi == 0),
                     is_last_in_segment=(pi == len(points) - 1),
+                    layer_normal=seg_normal,
                 )
 
                 # Before-point hook

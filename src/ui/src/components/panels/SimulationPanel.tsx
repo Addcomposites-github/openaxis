@@ -138,10 +138,20 @@ export default function SimulationPanel() {
     const hasOrientation = !isNaN(rxDeg) && !isNaN(ryDeg) && !isNaN(rzDeg);
     const orientation = hasOrientation ? [rxDeg, ryDeg, rzDeg] : undefined;
 
+    // TCP offset from the configured end-effector: [x,y,z,rx,ry,rz] meters+degrees, flange frame.
+    const tcpOff = [
+      endEffectorOffset[0] || 0,
+      endEffectorOffset[1] || 0,
+      endEffectorOffset[2] || 0,
+      endEffectorOffset[3] || 0,
+      endEffectorOffset[4] || 0,
+      endEffectorOffset[5] || 0,
+    ];
+
     setTcpMoveStatus('solving');
     setTcpMoveError(null);
     try {
-      const result = await computeIK(pos, orientation);
+      const result = await computeIK(pos, orientation, undefined, tcpOff);
       if (result.valid && result.solution) {
         // Prefer names returned by the solver; fall back to jointLimits state
         const names = result.jointNames ?? jointLimits?.jointNames ?? Object.keys(jointAngles);
@@ -314,16 +324,37 @@ export default function SimulationPanel() {
       const eox = endEffectorOffset[0] || 0;
       const eoy = endEffectorOffset[1] || 0;
       const eoz = endEffectorOffset[2] || 0;
+      // Full 6DOF TCP offset: translation (meters) + rotation (degrees ZYX Euler), in flange frame.
+      // Matches ABB tooldata, KUKA $TOOL, Fanuc UTOOL conventions.
+      const eorx = endEffectorOffset[3] || 0;
+      const eory = endEffectorOffset[4] || 0;
+      const eorz = endEffectorOffset[5] || 0;
       const toolLength = Math.sqrt(eox * eox + eoy * eoy + eoz * eoz) || 0.15;
+
+      // Build per-waypoint normals in robot base frame.
+      // The normal from the slicer is in slicer frame (Z-up mm) — same axes as robot
+      // base frame (both Z-up), so we apply only the coordinate-axis swap used in
+      // waypointToRobotFrame but for a direction vector (no translation, no scale).
+      // Slicer frame Z-up → robot frame Z-up:
+      //   scene Y-up transform: slicer (x,y,z) → scene (x, z, -y)
+      //   scene→robot inverse:  scene (x,y,z)  → robot (x, -z, y)
+      //   combined:             slicer (nx,ny,nz) → robot (nx, nz, ny)
+      //   Note: scale (mm→m) cancels for a unit vector.
+      const robotNormals: [number, number, number][] = trajectory.waypoints.map((w) => {
+        const n = (w.normal as [number, number, number]) ?? [0, 0, 1];
+        // Apply same axis swap as waypointToRobotFrame (direction vector, no translation)
+        return [n[0], n[2], n[1]];
+      });
 
       const t0 = performance.now();
 
       // Try backend roboticstoolbox-python solver first
       if (backendConnectedRef.current) {
         try {
-          const tcpOffset = [eox, eoy, eoz, 0, 0, 0];
+          // Full 6DOF TCP offset: [x,y,z,rx,ry,rz] meters + degrees, flange frame.
+          const tcpOffset = [eox, eoy, eoz, eorx, eory, eorz];
           console.log(`[IK] Solving ${totalWps} waypoints via backend (roboticstoolbox-python, Levenberg-Marquardt)...`);
-          const result = await solveTrajectoryIK(positions, undefined, tcpOffset);
+          const result = await solveTrajectoryIK(positions, undefined, tcpOffset, 0, 0, robotNormals);
           const dt = performance.now() - t0;
           stopIkTimer();
 
@@ -426,11 +457,15 @@ export default function SimulationPanel() {
       if (fkTimerRef.current) clearTimeout(fkTimerRef.current);
       fkTimerRef.current = setTimeout(async () => {
         try {
-          // Pass TCP offset so fkine() returns TCP position (not just flange)
+          // Full 6DOF TCP offset: [x,y,z,rx,ry,rz] meters + degrees, flange frame.
+          // fkine() with robot.tool set returns TCP position (not just flange).
           const tcpOff = [
             endEffectorOffset[0] || 0,
             endEffectorOffset[1] || 0,
             endEffectorOffset[2] || 0,
+            endEffectorOffset[3] || 0,
+            endEffectorOffset[4] || 0,
+            endEffectorOffset[5] || 0,
           ];
           const result = await computeFK(Object.values(angles), tcpOff);
           setFkResult(result);

@@ -51,6 +51,9 @@ class SimulationService:
             points = seg.get("points", [])
             speed = seg.get("speed", 50.0)  # mm/s
             seg_type = seg.get("type", "perimeter")
+            # Slicing plane normal for this segment (slicer frame, Z-up).
+            # [0,0,1] for planar slicing; varies for angled/non-planar slicers.
+            seg_normal = seg.get("normal", [0.0, 0.0, 1.0])
 
             if not points:
                 continue
@@ -79,6 +82,7 @@ class SimulationService:
 
                 waypoints.append({
                     "position": pt,
+                    "normal": seg_normal,
                     "time": current_time,
                     "segmentType": seg_type,
                     "layer": seg.get("layer", 0),
