@@ -218,10 +218,19 @@ class ToolpathService:
         segments_data = []
 
         for segment in toolpath.segments:
+            # Layer normal: the unit vector normal to the slicing plane for this layer,
+            # expressed in slicer frame (mm, Z-up). This defines the "up" direction of
+            # the print layer — the tool Z-axis must align with this normal.
+            # For planar Z-up slicing: normal is always [0, 0, 1] (world Z-up).
+            # For angled/non-planar slicers: normal would vary per layer/segment.
+            # The frontend transforms this into robot base frame before sending to IK.
+            layer_normal = list(getattr(segment, 'layer_normal', [0.0, 0.0, 1.0]))
+
             seg_dict = {
                 'type': segment.type.value if hasattr(segment.type, 'value') else str(segment.type),
                 'layer': segment.layer_index,
                 'points': [[float(p[0]), float(p[1]), float(p[2])] for p in segment.points],
+                'normal': [float(layer_normal[0]), float(layer_normal[1]), float(layer_normal[2])],
                 'speed': float(segment.speed) if segment.speed else 1000.0,
                 'extrusionRate': float(segment.flow_rate) if segment.flow_rate else 1.0,
                 'direction': getattr(segment, 'direction', 'cw'),

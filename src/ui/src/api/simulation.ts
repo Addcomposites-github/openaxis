@@ -15,6 +15,9 @@ export interface SimulationInfo {
 
 export interface Waypoint {
   position: [number, number, number];
+  /** Slicing plane normal in slicer frame (Z-up mm). [0,0,1] for planar slicing.
+   *  Defines the "up" direction of the print layer — tool Z-axis aligns to this. */
+  normal?: [number, number, number];
   time: number;
   segmentType: string;
   layer: number;

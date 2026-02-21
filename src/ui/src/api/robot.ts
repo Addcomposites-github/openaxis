@@ -178,18 +178,23 @@ export async function computeFK(jointValues: number[], tcpOffset?: number[]): Pr
 /**
  * Compute inverse kinematics for a single target pose.
  * targetPosition: [x, y, z] in meters, robot base frame (Z-up, ABB convention)
- * targetOrientation: optional [rx, ry, rz] in DEGREES (RPY Euler angles)
+ * targetOrientation: optional [rx, ry, rz] in DEGREES (RPY ZYX Euler angles)
  *   Omit to use default tool-down posture (RPY = [0, 180, 0] deg).
+ * tcpOffset: optional [x, y, z, rx, ry, rz] in meters + degrees, in flange frame.
+ *   Matches ABB tooldata, KUKA $TOOL, Fanuc UTOOL conventions.
+ *   The solver will find the flange pose that places the TCP at targetPosition.
  */
 export async function computeIK(
   targetPosition: [number, number, number],
   targetOrientation?: number[],
-  initialGuess?: number[]
+  initialGuess?: number[],
+  tcpOffset?: number[],
 ): Promise<IKResult> {
   const response = await apiClient.post<ApiResponse<IKResult>>('/api/robot/ik', {
     targetPosition,
     targetOrientation,
     initialGuess,
+    tcpOffset,
   });
   if (response.data.status === 'success' && response.data.data) {
     return response.data.data;
@@ -207,9 +212,13 @@ export async function computeIK(
  * For large toolpaths, use chunkStart + chunkSize to solve in windows
  * (e.g., 2000 waypoints at a time as the simulation advances).
  *
- * @param tcpOffset - [x, y, z, rx, ry, rz] in meters/radians
+ * @param tcpOffset - [x, y, z, rx, ry, rz] meters + degrees ZYX Euler, in flange frame.
+ *   Matches ABB tooldata / KUKA $TOOL / Fanuc UTOOL conventions.
  * @param chunkStart - Start index for chunked solving (0 = full batch)
  * @param chunkSize - Number of waypoints to solve (0 = all)
+ * @param normals - per-waypoint slicing plane normals [nx,ny,nz] in robot base frame (Z-up).
+ *   The tool Z-axis is aligned with each normal so it approaches perpendicular to the print plane.
+ *   For planar slicing all normals are [0,0,1]. For angled/non-planar slicers they vary per waypoint.
  */
 export async function solveTrajectoryIK(
   waypoints: [number, number, number][],
@@ -217,11 +226,13 @@ export async function solveTrajectoryIK(
   tcpOffset?: number[],
   chunkStart: number = 0,
   chunkSize: number = 0,
+  normals?: [number, number, number][],
 ): Promise<TrajectoryIKResult> {
   const response = await apiClient.post<ApiResponse<TrajectoryIKResult>>('/api/robot/solve-trajectory', {
     waypoints,
     initialGuess,
     tcpOffset,
+    normals,
     chunkStart,
     chunkSize,
   }, { timeout: 300000 }); // 5 min — IK for large toolpaths can be slow

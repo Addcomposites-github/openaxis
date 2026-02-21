@@ -226,8 +226,14 @@ class RobotService:
         robot = self._rtb_robot
         original_tool = robot.tool
         try:
-            # Set tool transform if tcp_offset provided
-            if tcp_offset and len(tcp_offset) >= 3:
+            # Set full 6DOF tool transform if tcp_offset provided.
+            # Convention: [tx, ty, tz] meters + [rx, ry, rz] degrees ZYX Euler, in flange frame.
+            # Matches ABB tooldata, KUKA $TOOL, Fanuc UTOOL conventions.
+            if tcp_offset and len(tcp_offset) >= 6:
+                tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
+                rx, ry, rz = tcp_offset[3], tcp_offset[4], tcp_offset[5]
+                robot.tool = SE3(tx, ty, tz) * SE3.RPY(rx, ry, rz, unit='deg')
+            elif tcp_offset and len(tcp_offset) >= 3:
                 tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
                 robot.tool = SE3(tx, ty, tz)
 
@@ -263,14 +269,19 @@ class RobotService:
 
     def inverse_kinematics(
         self, target_position: List[float], target_orientation: Optional[List[float]] = None,
-        initial_guess: Optional[List[float]] = None
+        initial_guess: Optional[List[float]] = None,
+        tcp_offset: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
-        """Compute inverse kinematics for a target pose.
+        """Compute inverse kinematics for a target pose (single point).
 
         Input frame: meters, Z-up, robot base frame (same as solve_toolpath_ik).
         target_orientation: optional [rx_deg, ry_deg, rz_deg] Euler RPY in degrees.
         If omitted, defaults to tool pointing straight down (-Z), the standard
         WAAM/manufacturing posture (RPY = [0, 180, 0] deg).
+
+        tcp_offset: [x, y, z, rx, ry, rz] (meters, degrees) — same convention as
+        solve_toolpath_ik. Sets robot.tool so the solver places the TCP (not the
+        flange) at target_position. The target position is the desired TCP location.
 
         Uses roboticstoolbox DHRobot.ikine_LM() (same solver as solve_toolpath_ik)
         when available.  Falls back to compas_fab IK if RTB is not installed.
@@ -283,7 +294,17 @@ class RobotService:
             try:
                 robot = self._rtb_robot
                 original_tool = robot.tool
-                robot.tool = SE3()  # No tool offset for single-point move
+
+                # Apply TCP offset (same 6DOF convention as solve_toolpath_ik).
+                if tcp_offset and len(tcp_offset) >= 6:
+                    tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
+                    rx_t, ry_t, rz_t = tcp_offset[3], tcp_offset[4], tcp_offset[5]
+                    robot.tool = SE3(tx, ty, tz) * SE3.RPY(rx_t, ry_t, rz_t, unit='deg')
+                elif tcp_offset and len(tcp_offset) >= 3:
+                    tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
+                    robot.tool = SE3(tx, ty, tz)
+                else:
+                    robot.tool = SE3()  # identity — TCP = flange
 
                 if initial_guess and len(initial_guess) >= 6:
                     q0 = np.array(initial_guess[:6])
@@ -360,6 +381,7 @@ class RobotService:
         self, waypoints: List[List[float]], initial_guess: Optional[List[float]] = None,
         tcp_offset: Optional[List[float]] = None, max_waypoints: int = 0,
         chunk_start: int = 0, chunk_size: int = 0,
+        normals: Optional[List[List[float]]] = None,
     ) -> Dict[str, Any]:
         """Solve IK for a sequence of waypoints using roboticstoolbox-python.
 
@@ -372,8 +394,17 @@ class RobotService:
           2. Chunked: Set chunk_start + chunk_size to solve a window.
              Frontend requests chunks progressively as simulation advances.
 
-        The tcp_offset [x, y, z, rx, ry, rz] (meters/radians) shifts the IK target
-        so the solver finds the flange position that places the tool tip at each waypoint.
+        tcp_offset: [x, y, z, rx, ry, rz] (meters, degrees) sets robot.tool so the
+        solver finds the flange position that places the TCP at each waypoint.
+        tcp_offset is expressed in the flange frame (standard for all robot brands:
+        ABB tooldata, KUKA $TOOL, Fanuc UTOOL).
+
+        normals: optional list of [nx, ny, nz] unit vectors (one per waypoint) in
+        the robot base frame (meters, Z-up). Each normal defines the slicing plane
+        normal — the tool Z-axis is aligned to this direction (tool approaches the
+        print surface along the plane normal). For planar slicing, all normals are
+        [0, 0, 1] (tool pointing straight down from above). For angled/non-planar
+        slicing the normals will vary per waypoint. If omitted, defaults to [0, 0, 1].
         """
         total = len(waypoints)
 
@@ -382,10 +413,12 @@ class RobotService:
             start = max(0, chunk_start)
             end = min(total, start + chunk_size)
             solve_wps = waypoints[start:end]
+            solve_normals = normals[start:end] if normals else None
         else:
             start = 0
             end = total
             solve_wps = waypoints
+            solve_normals = normals
 
         # TCP offset passed to solver — it sets robot.tool = SE3(...) per
         # roboticstoolbox-python standard API (Peter Corke, "Robotics, Vision
@@ -394,7 +427,7 @@ class RobotService:
 
         # ── Primary: roboticstoolbox-python DH solver ─────────────────────────
         if RTB_AVAILABLE and self._rtb_robot is not None:
-            return self._solve_rtb(solve_wps, tcp_offset, initial_guess, start, total)
+            return self._solve_rtb(solve_wps, tcp_offset, initial_guess, start, total, solve_normals)
 
         # ── Fallback: compas IK solver ────────────────────────────────────────
         if self._ik_solver:
@@ -405,22 +438,41 @@ class RobotService:
     def _solve_rtb(
         self, waypoints: list, tcp_offset: Optional[List[float]],
         initial_guess: Optional[list], chunk_start: int, total: int,
+        normals: Optional[list] = None,
     ) -> Dict[str, Any]:
         """Solve IK using roboticstoolbox-python (production-grade DH solver).
 
-        Uses robot.tool = SE3(...) to set the tool center point transform.
+        Uses robot.tool = SE3(...) to set the full 6DOF TCP transform.
         ikine_LM automatically accounts for robot.tool via the ETS chain.
 
+        TCP convention (matches all robot OLP standards):
+          - robot.tool is expressed in the flange frame
+          - Translation: [tx, ty, tz] in meters from flange origin to TCP
+          - Rotation: SE3.RPY(rx, ry, rz, unit='deg') — ZYX Euler, flange frame
+          - Same definition as ABB tooldata, KUKA $TOOL, Fanuc UTOOL
+
+        Target frame orientation:
+          - Derived from the slicing plane normal (per-waypoint)
+          - The tool Z-axis (approach direction) aligns with the plane normal
+          - For planar Z-up slicing: normal = [0,0,1], tool points straight down
+          - For angled/non-planar slicing: normal varies per waypoint
+          - Method: build a rotation matrix with Z=normal, then find minimal rotation
+            Reference: Peter Corke, "Robotics, Vision and Control", Springer 2023, §2.1
+
         Library: roboticstoolbox-python DHRobot.ikine_LM()
-        Reference: Peter Corke, "Robotics, Vision and Control", Springer 2023.
         """
         t0 = time.perf_counter()
         robot = self._rtb_robot
 
-        # Set tool transform ONCE before solving (standard roboticstoolbox API).
+        # Set full 6DOF tool transform (standard roboticstoolbox API).
         # robot.tool is post-multiplied in fkine() and baked into ETS for ikine_LM().
+        # Convention: [tx, ty, tz] meters + [rx, ry, rz] degrees ZYX Euler, all in flange frame.
         original_tool = robot.tool
-        if tcp_offset and len(tcp_offset) >= 3:
+        if tcp_offset and len(tcp_offset) >= 6:
+            tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
+            rx, ry, rz = tcp_offset[3], tcp_offset[4], tcp_offset[5]
+            robot.tool = SE3(tx, ty, tz) * SE3.RPY(rx, ry, rz, unit='deg')
+        elif tcp_offset and len(tcp_offset) >= 3:
             tx, ty, tz = tcp_offset[0], tcp_offset[1], tcp_offset[2]
             robot.tool = SE3(tx, ty, tz)
         else:
@@ -436,10 +488,17 @@ class RobotService:
         reachability = []
         successes = 0
 
-        for wp in waypoints:
-            # Target: TCP at waypoint position, tool pointing straight down (-Z).
-            # No manual offset — robot.tool handles TCP transform in ikine_LM.
-            target = SE3(wp[0], wp[1], wp[2]) * SE3.RPY(0, 180, 0, unit='deg')
+        for i, wp in enumerate(waypoints):
+            # Build target SE3 from waypoint position + slicing plane normal.
+            # The normal defines which direction the tool should approach from:
+            # tool Z-axis = plane normal (the slicer tells us which way is "up"
+            # for each print layer). We build a full rotation from the normal.
+            if normals and i < len(normals):
+                target = SE3(wp[0], wp[1], wp[2]) * self._normal_to_SE3(normals[i])
+            else:
+                # Default: planar Z-up slicing → tool points straight down (-Z in world)
+                # RPY(0, 180, 0) flips the robot Z-axis to point downward.
+                target = SE3(wp[0], wp[1], wp[2]) * SE3.RPY(0, 180, 0, unit='deg')
 
             sol = robot.ikine_LM(target, q0=q_seed)
 
@@ -480,6 +539,49 @@ class RobotService:
             "solverTime": round(dt, 3),
             "solver": "roboticstoolbox",
         }
+
+    def _normal_to_SE3(self, normal: List[float]) -> 'SE3':
+        """Build a rotation SE3 from a slicing plane normal vector.
+
+        The normal defines the "up" direction of the print layer — the tool
+        Z-axis must align with (oppose) this direction so the tool approaches
+        perpendicular to the print plane.
+
+        Convention:
+          - Input: [nx, ny, nz] — unit vector in robot base frame (Z-up)
+          - Output: SE3 rotation where Z-axis = -normal (tool Z points INTO surface)
+            i.e. approach direction opposes the normal (tool comes from above the layer)
+
+        For planar Z-up slicing: normal = [0,0,1] → tool Z = [0,0,-1]
+        → equivalent to RPY(0, 180, 0) which is the original hardcoded default.
+
+        Algorithm: Rodrigues' rotation formula to align [0,0,1] with -normal.
+        Reference: Peter Corke, "Robotics, Vision and Control", Springer 2023, §2.1.
+        """
+        n = np.array(normal, dtype=float)
+        norm = np.linalg.norm(n)
+        if norm < 1e-9:
+            # Degenerate normal — fall back to straight-down
+            return SE3.RPY(0, 180, 0, unit='deg')
+        n = n / norm
+
+        # Tool Z axis should oppose the normal (approach from above the layer)
+        tool_z = -n
+
+        # Build an orthonormal frame: pick an arbitrary X that is not parallel to tool_z
+        if abs(tool_z[0]) < 0.9:
+            arb = np.array([1.0, 0.0, 0.0])
+        else:
+            arb = np.array([0.0, 1.0, 0.0])
+
+        tool_y = np.cross(tool_z, arb)
+        tool_y /= np.linalg.norm(tool_y)
+        tool_x = np.cross(tool_y, tool_z)
+        tool_x /= np.linalg.norm(tool_x)
+
+        # Rotation matrix: columns are [tool_x, tool_y, tool_z] in robot base frame
+        R = np.column_stack([tool_x, tool_y, tool_z])
+        return SE3(R)
 
     def _solve_compas(
         self, waypoints: list, tcp_offset: Optional[List[float]],
